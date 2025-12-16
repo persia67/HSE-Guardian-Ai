@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import Webcam from 'react-webcam';
-import { Camera, AlertTriangle, CheckCircle, Pause, Play, CameraOff, Settings, Volume2, VolumeX, Bell, BellOff, X, Zap, List, Disc, Video, BrainCircuit, TrendingUp } from 'lucide-react';
+import { Camera, AlertTriangle, CheckCircle, Pause, Play, CameraOff, Settings, Volume2, VolumeX, Bell, BellOff, X, Zap, List, Disc, Video, BrainCircuit, TrendingUp, Filter, ChevronDown } from 'lucide-react';
 import { analyzeSafetyImage } from '../services/geminiService';
 import { SafetyAnalysis, LogEntry } from '../types';
 
@@ -8,9 +8,11 @@ interface MonitorProps {
   onNewAnalysis: (analysis: LogEntry) => void;
 }
 
+type SeverityTrigger = 'OFF' | 'LOW' | 'MEDIUM' | 'HIGH';
+
 interface AlertSettings {
   minSafetyScore: number;
-  alertOnHighSeverity: boolean;
+  minSeverityTrigger: SeverityTrigger;
   soundEnabled: boolean;
   preRollSeconds: number;
 }
@@ -36,12 +38,16 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const videoChunksRef = useRef<Blob[]>([]); 
   const [bufferDuration, setBufferDuration] = useState(0); 
+
+  // Camera Device State
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string | undefined>(undefined);
   
   // Alert State
   const [showSettings, setShowSettings] = useState(false);
   const [alertSettings, setAlertSettings] = useState<AlertSettings>({
     minSafetyScore: 60,
-    alertOnHighSeverity: true,
+    minSeverityTrigger: 'HIGH', // Default to High only
     soundEnabled: true,
     preRollSeconds: 3 // Default 3 seconds buffer
   });
@@ -50,6 +56,28 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
   const audioContextRef = useRef<AudioContext | null>(null);
   const oscillatorRef = useRef<OscillatorNode | null>(null);
   const gainNodeRef = useRef<GainNode | null>(null);
+
+  // Device Enumeration
+  const handleDevices = useCallback(
+    (mediaDevices: MediaDeviceInfo[]) => {
+      const videoDevices = mediaDevices.filter(({ kind }) => kind === "videoinput");
+      setDevices(videoDevices);
+      
+      // Auto-select preference: Back camera > First available
+      if (videoDevices.length > 0 && !selectedDeviceId) {
+        const backCamera = videoDevices.find(d => 
+          d.label.toLowerCase().includes('back') || 
+          d.label.toLowerCase().includes('environment')
+        );
+        setSelectedDeviceId(backCamera ? backCamera.deviceId : videoDevices[0].deviceId);
+      }
+    },
+    [selectedDeviceId]
+  );
+
+  useEffect(() => {
+    navigator.mediaDevices.enumerateDevices().then(handleDevices);
+  }, [handleDevices]);
 
   // Sound Logic
   const startAlarm = useCallback(() => {
@@ -160,12 +188,31 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
   const checkAlerts = useCallback((analysis: SafetyAnalysis) => {
     let shouldTrigger = false;
 
+    // 1. Check Safety Score
     if (analysis.safetyScore < alertSettings.minSafetyScore) {
       shouldTrigger = true;
     }
 
-    if (alertSettings.alertOnHighSeverity && analysis.hazards.some(h => h.severity === 'HIGH')) {
-      shouldTrigger = true;
+    // 2. Check Severity Level
+    const severityWeight: Record<string, number> = { 'SAFE': 0, 'LOW': 1, 'MEDIUM': 2, 'HIGH': 3 };
+    const triggerThresholds: Record<SeverityTrigger, number> = { 
+      'OFF': 99, 
+      'LOW': 1, // Alert on Low, Medium, High
+      'MEDIUM': 2, // Alert on Medium, High
+      'HIGH': 3 // Alert on High only
+    };
+
+    const userThreshold = triggerThresholds[alertSettings.minSeverityTrigger];
+
+    if (userThreshold < 99) {
+      const hasSevereHazard = analysis.hazards.some(h => {
+        const weight = severityWeight[h.severity] || 0;
+        return weight >= userThreshold;
+      });
+      
+      if (hasSevereHazard) {
+        shouldTrigger = true;
+      }
     }
 
     if (shouldTrigger) {
@@ -273,9 +320,6 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
             // Create a blob from current buffer
             const clipBlob = new Blob(videoChunksRef.current, { type: 'video/webm' });
             videoUrl = URL.createObjectURL(clipBlob);
-            
-            // Optional: Clear buffer after capture to avoid duplicate clips for same event immediately? 
-            // For now, we keep it to allow continuous context if hazard persists.
           }
           
           onNewAnalysis({
@@ -390,17 +434,37 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
                 <p className="text-xs text-slate-500 mt-1">Seconds of video to capture BEFORE a hazard is detected.</p>
               </div>
 
-              <div className="flex items-center justify-between p-4 bg-slate-700/50 rounded-lg border border-slate-600">
-                <div className="flex flex-col">
-                  <span className="text-slate-200 font-medium">High Severity Hazards</span>
-                  <span className="text-xs text-slate-400">Trigger alert on HIGH risk items</span>
+              {/* Granular Severity Control */}
+              <div className="p-4 bg-slate-700/50 rounded-lg border border-slate-600">
+                <div className="flex items-center gap-2 mb-3">
+                  <Filter className="w-4 h-4 text-slate-300" />
+                  <span className="text-slate-200 font-medium text-sm">Alert Trigger Level</span>
                 </div>
-                <button 
-                  onClick={() => setAlertSettings(prev => ({...prev, alertOnHighSeverity: !prev.alertOnHighSeverity}))}
-                  className={`w-12 h-6 rounded-full relative transition-colors ${alertSettings.alertOnHighSeverity ? 'bg-orange-600' : 'bg-slate-600'}`}
-                >
-                  <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${alertSettings.alertOnHighSeverity ? 'left-7' : 'left-1'}`}></div>
-                </button>
+                
+                <div className="grid grid-cols-4 gap-2">
+                  {(['OFF', 'LOW', 'MEDIUM', 'HIGH'] as SeverityTrigger[]).map((level) => (
+                    <button
+                      key={level}
+                      onClick={() => setAlertSettings(prev => ({...prev, minSeverityTrigger: level}))}
+                      className={`py-2 px-1 rounded text-xs font-bold transition-all border ${
+                        alertSettings.minSeverityTrigger === level 
+                          ? level === 'HIGH' ? 'bg-red-600 border-red-500 text-white' 
+                          : level === 'MEDIUM' ? 'bg-orange-500 border-orange-400 text-black'
+                          : level === 'LOW' ? 'bg-blue-600 border-blue-500 text-white'
+                          : 'bg-slate-600 border-slate-500 text-white'
+                          : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700'
+                      }`}
+                    >
+                      {level === 'OFF' ? 'None' : `${level}+`}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs text-slate-500 mt-2">
+                  {alertSettings.minSeverityTrigger === 'OFF' && "Alerts disabled for hazard severity."}
+                  {alertSettings.minSeverityTrigger === 'LOW' && "Alerts on LOW, MEDIUM, and HIGH hazards."}
+                  {alertSettings.minSeverityTrigger === 'MEDIUM' && "Alerts on MEDIUM and HIGH hazards."}
+                  {alertSettings.minSeverityTrigger === 'HIGH' && "Alerts on HIGH hazards only."}
+                </p>
               </div>
 
               <div className="flex items-center justify-between p-4 bg-slate-700/50 rounded-lg border border-slate-600">
@@ -437,7 +501,10 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
             ref={webcamRef}
             screenshotFormat="image/jpeg"
             className="w-full h-full object-fill" 
-            videoConstraints={{ facingMode: "environment", aspectRatio: 1.777777778 }}
+            videoConstraints={{ 
+              deviceId: selectedDeviceId,
+              aspectRatio: 1.777777778 
+            }}
           />
           
           {/* Detected Hazard Bounding Boxes */}
@@ -535,6 +602,35 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
             </div>
           )}
         </div>
+
+        {/* Camera Selector Logic */}
+        {devices.length > 1 && (
+         <div className="bg-slate-800 border border-slate-700 p-3 rounded-lg flex items-center gap-3 shadow-sm">
+            <div className="bg-slate-700 p-1.5 rounded text-slate-300">
+               <Camera className="w-4 h-4" />
+            </div>
+            <div className="flex-1">
+               <label className="text-[10px] uppercase font-bold text-slate-500 block mb-0.5">Select Input Source</label>
+               <div className="relative">
+                 <select 
+                   value={selectedDeviceId}
+                   onChange={(e) => setSelectedDeviceId(e.target.value)}
+                   className="bg-transparent text-sm font-bold text-slate-200 w-full outline-none border-none p-0 cursor-pointer appearance-none z-10 relative"
+                 >
+                   {devices.map((device, key) => (
+                      <option key={key} value={device.deviceId} className="bg-slate-900 text-slate-300">
+                        {device.label || `Camera ${key + 1} (${device.deviceId.slice(0,5)}...)`}
+                      </option>
+                   ))}
+                 </select>
+                 <ChevronDown className="w-4 h-4 text-slate-400 absolute right-0 top-0 pointer-events-none" />
+               </div>
+            </div>
+            <div className="text-xs font-mono text-slate-500 bg-slate-900 px-2 py-1 rounded">
+               {devices.length} CAMs
+            </div>
+         </div>
+        )}
 
         <div className="flex gap-4">
           <button
