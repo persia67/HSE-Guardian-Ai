@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Shield, Activity, List, Video, AlertOctagon, Download, Sparkles, FileText, Loader2 } from 'lucide-react';
+import { Shield, Activity, List, Video, AlertOctagon, Download, Sparkles, FileText, Loader2, PlayCircle } from 'lucide-react';
 import Monitor from './components/Monitor';
 import SafetyChart from './components/SafetyChart';
 import { LogEntry, AppTab } from './types';
@@ -236,13 +236,28 @@ export default function App() {
                 ) : (
                   logs.map((log) => (
                     <div key={log.id} className="bg-slate-800 rounded-xl overflow-hidden border border-slate-700 shadow-md flex flex-col md:flex-row">
-                      <div className="w-full md:w-48 h-32 md:h-auto bg-black relative shrink-0">
+                      <div className="w-full md:w-48 h-32 md:h-auto bg-black relative shrink-0 group">
                         {log.thumbnail && (
                           <img src={log.thumbnail} alt="Snap" className="w-full h-full object-cover opacity-80" />
                         )}
                         <div className="absolute top-2 left-2 bg-black/70 text-white text-xs px-2 py-1 rounded font-mono">
                           {log.timestamp}
                         </div>
+                        {log.videoUrl && (
+                          <a 
+                             href={log.videoUrl} 
+                             target="_blank" 
+                             rel="noopener noreferrer"
+                             className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                          >
+                            <PlayCircle className="w-12 h-12 text-white drop-shadow-lg" />
+                          </a>
+                        )}
+                        {log.videoUrl && (
+                          <div className="absolute bottom-2 right-2 bg-red-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1 shadow-sm">
+                            <Video className="w-3 h-3" /> CLIP
+                          </div>
+                        )}
                       </div>
                       <div className="p-4 flex-1">
                         <div className="flex justify-between items-start mb-2">
@@ -254,6 +269,16 @@ export default function App() {
                               Score: {log.safetyScore}
                             </span>
                           </div>
+                          {log.videoUrl && (
+                             <a 
+                               href={log.videoUrl} 
+                               target="_blank" 
+                               rel="noopener noreferrer"
+                               className="text-xs flex items-center gap-1 text-indigo-400 hover:text-indigo-300 border border-indigo-500/30 px-2 py-1 rounded bg-indigo-500/10"
+                             >
+                               <PlayCircle className="w-3 h-3" /> Evidence Clip
+                             </a>
+                          )}
                         </div>
                         <p className="text-slate-300 rtl-text mb-3">{log.summary}</p>
                         

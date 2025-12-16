@@ -17,6 +17,7 @@ export interface SafetyAnalysis {
 export interface LogEntry extends SafetyAnalysis {
   id: string;
   thumbnail?: string; // Base64 snapshot
+  videoUrl?: string; // Blob URL of the recorded clip if available
 }
 
 export enum AppTab {

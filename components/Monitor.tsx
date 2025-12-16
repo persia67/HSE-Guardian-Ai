@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import Webcam from 'react-webcam';
-import { Camera, AlertTriangle, CheckCircle, Pause, Play, CameraOff, Settings, Volume2, VolumeX, Bell, X, Zap, List } from 'lucide-react';
+import { Camera, AlertTriangle, CheckCircle, Pause, Play, CameraOff, Settings, Volume2, VolumeX, Bell, X, Zap, List, Disc, Video } from 'lucide-react';
 import { analyzeSafetyImage } from '../services/geminiService';
 import { SafetyAnalysis, LogEntry } from '../types';
 
@@ -17,6 +17,8 @@ interface AlertSettings {
 const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
   const webcamRef = useRef<Webcam>(null);
   const [isMonitoring, setIsMonitoring] = useState(false);
+  const [isRecordingMode, setIsRecordingMode] = useState(false);
+  const [isRecordingActive, setIsRecordingActive] = useState(false); // True when actually capturing bytes
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [lastAnalysis, setLastAnalysis] = useState<SafetyAnalysis | null>(null);
   const [intervalId, setIntervalId] = useState<ReturnType<typeof setInterval> | null>(null);
@@ -115,37 +117,83 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
   const captureAndAnalyze = useCallback(async () => {
     if (webcamRef.current && !isAnalyzing) {
       const imageSrc = webcamRef.current.getScreenshot();
+      const videoStream = webcamRef.current.video?.srcObject as MediaStream;
+      
       if (imageSrc) {
         setIsAnalyzing(true);
         const base64Data = imageSrc.split(',')[1];
         
+        let recordedBlob: Blob | null = null;
+        let mediaRecorder: MediaRecorder | null = null;
+        let chunks: BlobPart[] = [];
+
+        // Start Recording if enabled
+        if (isRecordingMode && videoStream) {
+          try {
+            setIsRecordingActive(true);
+            mediaRecorder = new MediaRecorder(videoStream, { mimeType: 'video/webm' });
+            mediaRecorder.ondataavailable = (e) => {
+              if (e.data.size > 0) chunks.push(e.data);
+            };
+            mediaRecorder.start();
+          } catch (e) {
+            console.error("Failed to start MediaRecorder", e);
+          }
+        }
+
         try {
           const startTime = performance.now();
           const result = await analyzeSafetyImage(base64Data);
           const endTime = performance.now();
           setLatency(Math.round(endTime - startTime));
 
+          // Stop Recording
+          if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+            await new Promise<void>((resolve) => {
+               if (!mediaRecorder) return resolve();
+               mediaRecorder.onstop = () => {
+                 recordedBlob = new Blob(chunks, { type: 'video/webm' });
+                 resolve();
+               };
+               mediaRecorder.stop();
+            });
+            setIsRecordingActive(false);
+          }
+
           setLastAnalysis(result);
-          checkAlerts(result); // Check thresholds
+          checkAlerts(result); 
+          
+          // Determine if we keep the video
+          let videoUrl: string | undefined = undefined;
+          if (recordedBlob && !result.isSafe) {
+             videoUrl = URL.createObjectURL(recordedBlob);
+          }
           
           onNewAnalysis({
             id: Date.now().toString(),
             ...result,
-            thumbnail: imageSrc
+            thumbnail: imageSrc,
+            videoUrl
           });
         } catch (e) {
           console.error("Analysis loop error", e);
+          if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+            mediaRecorder.stop();
+            setIsRecordingActive(false);
+          }
         } finally {
           setIsAnalyzing(false);
         }
       }
     }
-  }, [isAnalyzing, onNewAnalysis, checkAlerts]);
+  }, [isAnalyzing, onNewAnalysis, checkAlerts, isRecordingMode]);
 
   const toggleMonitoring = () => {
     if (isMonitoring) {
       if (intervalId) clearInterval(intervalId);
       setIsMonitoring(false);
+      setIsAnalyzing(false);
+      setIsRecordingActive(false);
     } else {
       setIsMonitoring(true);
       // Initialize Audio Context on user interaction to handle browser policies
@@ -334,6 +382,12 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
             <span className="text-xs font-mono font-bold bg-black/60 px-2 py-1 rounded text-white">
               {isMonitoring ? "LIVE FEED ACTIVE" : "FEED PAUSED"}
             </span>
+            {isRecordingMode && (
+              <span className={`text-xs font-mono font-bold bg-black/60 px-2 py-1 rounded text-white flex items-center gap-1 border border-red-900/50 ${isRecordingActive ? 'text-red-400' : 'text-slate-400'}`}>
+                <Disc className={`w-3 h-3 ${isRecordingActive ? 'animate-pulse text-red-500' : ''}`} />
+                {isRecordingActive ? "REC" : "REC READY"}
+              </span>
+            )}
           </div>
 
           {isAnalyzing && (
@@ -354,6 +408,19 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
           >
             <Settings className="w-6 h-6" />
           </button>
+          
+          <button
+             onClick={() => setIsRecordingMode(!isRecordingMode)}
+             className={`w-14 h-14 flex items-center justify-center rounded-lg border transition-colors ${
+               isRecordingMode 
+                 ? 'bg-red-900/30 border-red-500 text-red-500 hover:bg-red-900/50' 
+                 : 'bg-slate-800 border-slate-600 text-slate-300 hover:bg-slate-700'
+             }`}
+             title={isRecordingMode ? "Stop Hazard Recording" : "Start Hazard Recording"}
+          >
+            {isRecordingMode ? <Disc className="w-6 h-6 animate-pulse" /> : <Video className="w-6 h-6" />}
+          </button>
+
           <button
             onClick={toggleMonitoring}
             className={`flex-1 flex items-center justify-center gap-2 py-4 rounded-lg font-bold text-lg transition-colors ${
@@ -405,7 +472,7 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
 
                <div className="space-y-3">
                  <h3 className="text-xs uppercase text-slate-500 font-bold mb-2 flex items-center gap-2">
-                   <List className="w-4 h-4" /> Detected Hazards List
+                   <List className="w-4 h-4" /> Live Hazard Notifications
                  </h3>
                  {lastAnalysis.hazards.length === 0 ? (
                    <div className="text-center py-8 text-slate-500 bg-slate-800/50 rounded-lg border border-dashed border-slate-700">
@@ -413,20 +480,37 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
                    </div>
                  ) : (
                    lastAnalysis.hazards.map((hazard, idx) => (
-                     <div key={idx} className={`p-4 rounded-lg border-l-4 ${
+                     <div key={idx} className={`p-4 rounded-lg border-l-4 shadow-md ${
                        hazard.severity === 'HIGH' ? 'bg-red-900/20 border-red-500' :
                        hazard.severity === 'MEDIUM' ? 'bg-amber-900/20 border-amber-500' :
                        'bg-blue-900/20 border-blue-500'
                      }`}>
                        <div className="flex justify-between items-center mb-2">
-                         <span className="font-bold text-slate-200">{hazard.type}</span>
-                         <span className={`text-xs px-2 py-0.5 rounded font-bold ${
-                           hazard.severity === 'HIGH' ? 'bg-red-500 text-white' : 'bg-amber-500 text-black'
+                         <div className="flex items-center gap-2">
+                           <AlertTriangle className={`w-4 h-4 ${
+                              hazard.severity === 'HIGH' ? 'text-red-500' : 
+                              hazard.severity === 'MEDIUM' ? 'text-amber-500' : 'text-blue-500'
+                           }`} />
+                           <span className="font-bold text-slate-200">{hazard.type}</span>
+                         </div>
+                         <span className={`text-[10px] uppercase px-2 py-0.5 rounded font-bold tracking-wider ${
+                           hazard.severity === 'HIGH' ? 'bg-red-500 text-white' : 
+                           hazard.severity === 'MEDIUM' ? 'bg-amber-500 text-black' : 
+                           'bg-blue-600 text-white'
                          }`}>{hazard.severity}</span>
                        </div>
-                       <p className="rtl-text text-sm text-slate-300 mb-2">{hazard.description}</p>
-                       <div className="rtl-text text-sm font-semibold text-emerald-400 bg-emerald-900/10 p-2 rounded">
-                         💡 {hazard.recommendation}
+                       
+                       <div className="ml-6">
+                          <p className="rtl-text text-sm text-slate-300 mb-3 leading-relaxed border-r-2 border-slate-700 pr-2">
+                            {hazard.description}
+                          </p>
+                          <div className="flex items-start gap-2 rtl-text text-sm bg-black/20 p-2 rounded">
+                            <span className="text-xl">💡</span>
+                            <div>
+                               <span className="text-xs text-slate-500 font-bold uppercase block mb-0.5">Recommended Action:</span>
+                               <span className="font-semibold text-emerald-400">{hazard.recommendation}</span>
+                            </div>
+                          </div>
                        </div>
                      </div>
                    ))
