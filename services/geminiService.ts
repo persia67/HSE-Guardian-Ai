@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
-import { SafetyAnalysis } from "../types";
+import { SafetyAnalysis, LogEntry } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
@@ -89,5 +89,38 @@ export const analyzeSafetyImage = async (base64Image: string): Promise<SafetyAna
       summary: "Error connecting to AI Safety Officer. Please check connection.",
       hazards: [],
     };
+  }
+};
+
+export const generateSessionReport = async (logs: LogEntry[]): Promise<string> => {
+  try {
+    // Filter out heavy base64 images before sending to text model to save tokens
+    const textLogs = logs.map(({ thumbnail, ...rest }) => rest);
+    
+    const response = await ai.models.generateContent({
+      model: "gemini-3-pro-preview", // Using Pro for complex reasoning and summarization
+      contents: {
+        parts: [{
+          text: `You are a Senior HSE Manager. Analyze the following JSON logs from today's safety monitoring session.
+          
+          Logs Data: ${JSON.stringify(textLogs)}
+          
+          Task:
+          Write a comprehensive, professional executive report in Persian (Farsi).
+          The report should include:
+          1. **Overall Status**: Average safety score and general trend.
+          2. **Key Risks**: The most frequent or dangerous hazards detected.
+          3. **Timeline Analysis**: When did most incidents occur?
+          4. **Strategic Recommendations**: What long-term actions should management take based on this data?
+          
+          Format the output using clear Markdown with bullet points.`
+        }]
+      }
+    });
+
+    return response.text || "Could not generate report.";
+  } catch (error) {
+    console.error("Report Generation Error:", error);
+    return "Error generating AI report. Please try again.";
   }
 };

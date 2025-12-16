@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import Webcam from 'react-webcam';
-import { Camera, AlertTriangle, CheckCircle, Pause, Play, CameraOff, Settings, Volume2, VolumeX, Bell, X, Zap } from 'lucide-react';
+import { Camera, AlertTriangle, CheckCircle, Pause, Play, CameraOff, Settings, Volume2, VolumeX, Bell, X, Zap, List } from 'lucide-react';
 import { analyzeSafetyImage } from '../services/geminiService';
 import { SafetyAnalysis, LogEntry } from '../types';
 
@@ -300,6 +300,34 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
              );
           })}
 
+          {/* HUD Hazard List - New Feature */}
+          {lastAnalysis && lastAnalysis.hazards.length > 0 && (
+            <div className="absolute top-14 right-4 bottom-4 z-20 w-72 flex flex-col gap-2 pointer-events-none overflow-y-auto no-scrollbar mask-gradient-bottom">
+              {lastAnalysis.hazards.map((hazard, idx) => (
+                <div 
+                  key={`hud-${idx}`} 
+                  className={`backdrop-blur-md bg-slate-900/80 p-3 rounded-lg border-l-4 shadow-xl transform transition-all duration-500 ease-out translate-x-0 opacity-100 ${
+                    hazard.severity === 'HIGH' ? 'border-red-500 shadow-red-900/20' :
+                    hazard.severity === 'MEDIUM' ? 'border-orange-500 shadow-orange-900/20' : 'border-blue-500 shadow-blue-900/20'
+                  }`}
+                >
+                  <div className="flex justify-between items-start mb-1">
+                    <span className="font-bold text-white text-sm drop-shadow-md">{hazard.type}</span>
+                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded shadow-sm ${
+                       hazard.severity === 'HIGH' ? 'bg-red-600 text-white' : 
+                       hazard.severity === 'MEDIUM' ? 'bg-orange-500 text-black' : 'bg-blue-600 text-white'
+                    }`}>
+                      {hazard.severity}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-200 rtl-text leading-relaxed drop-shadow-sm">
+                    {hazard.description}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* Overlay Status */}
           <div className="absolute top-4 left-4 flex items-center gap-2 z-30">
             <span className={`animate-pulse w-3 h-3 rounded-full ${isMonitoring ? 'bg-red-500' : 'bg-gray-500'}`}></span>
@@ -376,7 +404,9 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
                </div>
 
                <div className="space-y-3">
-                 <h3 className="text-xs uppercase text-slate-500 font-bold mb-2">Detected Hazards</h3>
+                 <h3 className="text-xs uppercase text-slate-500 font-bold mb-2 flex items-center gap-2">
+                   <List className="w-4 h-4" /> Detected Hazards List
+                 </h3>
                  {lastAnalysis.hazards.length === 0 ? (
                    <div className="text-center py-8 text-slate-500 bg-slate-800/50 rounded-lg border border-dashed border-slate-700">
                      No immediate hazards detected by AI.

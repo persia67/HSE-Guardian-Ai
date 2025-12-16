@@ -1,12 +1,15 @@
 import React, { useState } from 'react';
-import { Shield, Activity, List, Video, AlertOctagon, Download } from 'lucide-react';
+import { Shield, Activity, List, Video, AlertOctagon, Download, Sparkles, FileText, Loader2 } from 'lucide-react';
 import Monitor from './components/Monitor';
 import SafetyChart from './components/SafetyChart';
 import { LogEntry, AppTab } from './types';
+import { generateSessionReport } from './services/geminiService';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>(AppTab.MONITOR);
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [aiReport, setAiReport] = useState<string | null>(null);
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
 
   const handleNewAnalysis = (entry: LogEntry) => {
     setLogs(prev => [entry, ...prev]);
@@ -49,6 +52,20 @@ export default function App() {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+  };
+
+  const handleGenerateAIReport = async () => {
+    if (logs.length === 0) return;
+    setIsGeneratingReport(true);
+    setAiReport(null);
+    try {
+      const report = await generateSessionReport(logs);
+      setAiReport(report);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsGeneratingReport(false);
+    }
   };
 
   // Derived Stats
@@ -168,16 +185,48 @@ export default function App() {
 
         {activeTab === AppTab.REPORTS && (
           <div className="h-full overflow-y-auto pr-2 scrollbar-thin max-w-5xl mx-auto">
-             <div className="flex justify-between items-center mb-6 border-b border-slate-700 pb-2">
-               <h2 className="text-2xl font-bold text-slate-100">Full Incident Log</h2>
-               <button 
-                 onClick={handleExportCSV}
-                 disabled={logs.length === 0}
-                 className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium shadow-md"
-               >
-                 <Download className="w-4 h-4" /> Export CSV
-               </button>
+             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 border-b border-slate-700 pb-4 gap-4">
+               <div>
+                  <h2 className="text-2xl font-bold text-slate-100">Full Incident Log</h2>
+                  <p className="text-slate-400 text-sm mt-1">Review captured events and generate insights.</p>
+               </div>
+               
+               <div className="flex gap-2">
+                 <button 
+                   onClick={handleGenerateAIReport}
+                   disabled={logs.length === 0 || isGeneratingReport}
+                   className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed font-medium shadow-lg shadow-indigo-900/30"
+                 >
+                   {isGeneratingReport ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                   AI Analysis
+                 </button>
+                 <button 
+                   onClick={handleExportCSV}
+                   disabled={logs.length === 0}
+                   className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium shadow-md border border-slate-600"
+                 >
+                   <Download className="w-4 h-4" /> CSV
+                 </button>
+               </div>
              </div>
+
+             {/* AI Report Section */}
+             {aiReport && (
+               <div className="mb-8 bg-slate-800/80 border border-indigo-500/50 rounded-xl p-6 shadow-lg shadow-indigo-900/20 relative overflow-hidden">
+                 <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-violet-500 to-indigo-500"></div>
+                 <h3 className="text-xl font-bold text-indigo-300 mb-4 flex items-center gap-2">
+                   <Sparkles className="w-5 h-5" /> Executive Safety Summary
+                 </h3>
+                 <div className="prose prose-invert prose-sm max-w-none text-slate-300 rtl-text whitespace-pre-wrap leading-relaxed">
+                   {aiReport}
+                 </div>
+                 <div className="mt-4 flex justify-end">
+                   <button onClick={() => setAiReport(null)} className="text-xs text-slate-500 hover:text-slate-300 underline">
+                     Dismiss Report
+                   </button>
+                 </div>
+               </div>
+             )}
 
              <div className="space-y-4">
                 {logs.length === 0 ? (
