@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import Webcam from 'react-webcam';
-import { Camera, AlertTriangle, CheckCircle, Pause, Play, CameraOff, Settings, Volume2, VolumeX, Bell, X, Zap, List, Disc, Video } from 'lucide-react';
+import { Camera, AlertTriangle, CheckCircle, Pause, Play, CameraOff, Settings, Volume2, VolumeX, Bell, BellOff, X, Zap, List, Disc, Video, BrainCircuit, TrendingUp } from 'lucide-react';
 import { analyzeSafetyImage } from '../services/geminiService';
 import { SafetyAnalysis, LogEntry } from '../types';
 
@@ -12,26 +12,41 @@ interface AlertSettings {
   minSafetyScore: number;
   alertOnHighSeverity: boolean;
   soundEnabled: boolean;
+  preRollSeconds: number;
+}
+
+interface Prediction {
+  hazardType: string;
+  probability: number; // 0-100
+  reasoning: string;
 }
 
 const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
   const webcamRef = useRef<Webcam>(null);
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [isRecordingMode, setIsRecordingMode] = useState(false);
-  const [isRecordingActive, setIsRecordingActive] = useState(false); // True when actually capturing bytes
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [lastAnalysis, setLastAnalysis] = useState<SafetyAnalysis | null>(null);
   const [intervalId, setIntervalId] = useState<ReturnType<typeof setInterval> | null>(null);
   const [latency, setLatency] = useState<number>(0);
+  const [predictions, setPredictions] = useState<Prediction[]>([]);
+  const [analysisHistory, setAnalysisHistory] = useState<SafetyAnalysis[]>([]);
+  
+  // Video Buffer State
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const videoChunksRef = useRef<Blob[]>([]); 
+  const [bufferDuration, setBufferDuration] = useState(0); 
   
   // Alert State
   const [showSettings, setShowSettings] = useState(false);
   const [alertSettings, setAlertSettings] = useState<AlertSettings>({
     minSafetyScore: 60,
     alertOnHighSeverity: true,
-    soundEnabled: true
+    soundEnabled: true,
+    preRollSeconds: 3 // Default 3 seconds buffer
   });
   const [isAlertActive, setIsAlertActive] = useState(false);
+  const [isSilenced, setIsSilenced] = useState(false);
   const audioContextRef = useRef<AudioContext | null>(null);
   const oscillatorRef = useRef<OscillatorNode | null>(null);
   const gainNodeRef = useRef<GainNode | null>(null);
@@ -88,8 +103,58 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
       } catch (e) {}
       oscillatorRef.current = null;
     }
-    // We don't close the context to allow reuse, but we stop the osc
   }, []);
+
+  // Buffer Management Effect
+  useEffect(() => {
+    let recorder: MediaRecorder | null = null;
+    let stream: MediaStream | null = null;
+    let sliceInterval: ReturnType<typeof setInterval> | null = null;
+
+    if (isRecordingMode && webcamRef.current?.video?.srcObject) {
+      stream = webcamRef.current.video.srcObject as MediaStream;
+      
+      try {
+        recorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp8' });
+        mediaRecorderRef.current = recorder;
+
+        recorder.ondataavailable = (e) => {
+          if (e.data.size > 0) {
+            videoChunksRef.current.push(e.data);
+            // Prune old chunks based on settings (roughly 1 chunk per sec if requestData(1000) is called)
+            // We keep extra chunks to cover the analysis duration
+            const maxChunks = alertSettings.preRollSeconds + 5; 
+            if (videoChunksRef.current.length > maxChunks) {
+               videoChunksRef.current = videoChunksRef.current.slice(-maxChunks);
+            }
+            setBufferDuration(Math.min(videoChunksRef.current.length, alertSettings.preRollSeconds));
+          }
+        };
+
+        recorder.start();
+        
+        // Request data every second to build granular chunks
+        sliceInterval = setInterval(() => {
+          if (recorder && recorder.state === 'recording') {
+            recorder.requestData();
+          }
+        }, 1000);
+
+      } catch (e) {
+        console.error("Buffer recorder error", e);
+      }
+    } else {
+      videoChunksRef.current = [];
+      setBufferDuration(0);
+    }
+
+    return () => {
+      if (sliceInterval) clearInterval(sliceInterval);
+      if (recorder && recorder.state !== 'inactive') {
+        recorder.stop();
+      }
+    };
+  }, [isRecordingMode, alertSettings.preRollSeconds]);
 
   // Check thresholds
   const checkAlerts = useCallback((analysis: SafetyAnalysis) => {
@@ -103,70 +168,114 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
       shouldTrigger = true;
     }
 
-    if (shouldTrigger && !isAlertActive) {
-      setIsAlertActive(true);
-      startAlarm();
+    if (shouldTrigger) {
+      if (!isAlertActive && !isSilenced) {
+        setIsAlertActive(true);
+        startAlarm();
+      }
+    } else {
+      // Condition cleared, reset silence
+      if (isSilenced) setIsSilenced(false);
+      
+      if (isAlertActive) {
+        setIsAlertActive(false);
+        stopAlarm();
+      }
     }
-  }, [alertSettings, isAlertActive, startAlarm]);
+  }, [alertSettings, isAlertActive, isSilenced, startAlarm, stopAlarm]);
 
   const acknowledgeAlert = () => {
     setIsAlertActive(false);
     stopAlarm();
+    setIsSilenced(true);
+  };
+
+  const generatePredictions = (current: SafetyAnalysis, history: SafetyAnalysis[]) => {
+    const newPredictions: Prediction[] = [];
+    
+    // 1. Fatigue Prediction logic
+    // If consecutive low scores or many detected hazards, predict fatigue/carelessness
+    const recentScores = [...history, current].slice(-5).map(h => h.safetyScore);
+    const avgScore = recentScores.reduce((a, b) => a + b, 0) / recentScores.length;
+    
+    if (history.length > 2 && avgScore < 70 && avgScore > 50) {
+       newPredictions.push({
+         hazardType: "Worker Fatigue / Decreased Attention",
+         probability: 75,
+         reasoning: "Consistent drop in safety compliance observed over last 5 intervals."
+       });
+    }
+
+    // 2. Pattern Matching (Simple)
+    // If 'No Helmet' appears frequently, predict 'Head Injury Risk'
+    const helmetViolations = [...history, current].filter(h => 
+      h.hazards.some(hz => hz.type.toLowerCase().includes('helmet') || hz.type.toLowerCase().includes('head'))
+    ).length;
+
+    if (helmetViolations >= 2) {
+      newPredictions.push({
+        hazardType: "High Risk of Head Injury",
+        probability: 85 + (helmetViolations * 2), // Increase confidence
+        reasoning: "Repeated PPE (Helmet) violations detected in short succession."
+      });
+    }
+
+    // 3. Housekeeping Logic
+    const tripHazards = current.hazards.filter(h => h.type.toLowerCase().includes('trip') || h.type.toLowerCase().includes('housekeeping'));
+    if (tripHazards.length > 0) {
+       newPredictions.push({
+         hazardType: "Area Congestion / Blocked Access",
+         probability: 60,
+         reasoning: "Current trip hazards suggest deteriorating housekeeping standards."
+       });
+    }
+    
+    // 4. Default Safe Prediction
+    if (current.isSafe && history.length > 5 && avgScore > 90) {
+       newPredictions.push({
+         hazardType: "Sustained Safe Operations",
+         probability: 95,
+         reasoning: "Stable high safety scores indicate controlled environment."
+       });
+    }
+
+    setPredictions(newPredictions);
   };
 
   const captureAndAnalyze = useCallback(async () => {
     if (webcamRef.current && !isAnalyzing) {
       const imageSrc = webcamRef.current.getScreenshot();
-      const videoStream = webcamRef.current.video?.srcObject as MediaStream;
       
       if (imageSrc) {
         setIsAnalyzing(true);
         const base64Data = imageSrc.split(',')[1];
         
-        let recordedBlob: Blob | null = null;
-        let mediaRecorder: MediaRecorder | null = null;
-        let chunks: BlobPart[] = [];
-
-        // Start Recording if enabled
-        if (isRecordingMode && videoStream) {
-          try {
-            setIsRecordingActive(true);
-            mediaRecorder = new MediaRecorder(videoStream, { mimeType: 'video/webm' });
-            mediaRecorder.ondataavailable = (e) => {
-              if (e.data.size > 0) chunks.push(e.data);
-            };
-            mediaRecorder.start();
-          } catch (e) {
-            console.error("Failed to start MediaRecorder", e);
-          }
-        }
-
         try {
           const startTime = performance.now();
           const result = await analyzeSafetyImage(base64Data);
           const endTime = performance.now();
           setLatency(Math.round(endTime - startTime));
 
-          // Stop Recording
-          if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-            await new Promise<void>((resolve) => {
-               if (!mediaRecorder) return resolve();
-               mediaRecorder.onstop = () => {
-                 recordedBlob = new Blob(chunks, { type: 'video/webm' });
-                 resolve();
-               };
-               mediaRecorder.stop();
-            });
-            setIsRecordingActive(false);
-          }
-
           setLastAnalysis(result);
-          checkAlerts(result); 
+          checkAlerts(result);
           
-          // Determine if we keep the video
+          // Update history for prediction
+          setAnalysisHistory(prev => {
+            const updated = [...prev, result].slice(-10); // Keep last 10
+            generatePredictions(result, updated);
+            return updated;
+          });
+
+          // Handle Video Clip Generation
           let videoUrl: string | undefined = undefined;
-          if (recordedBlob && !result.isSafe) {
-             videoUrl = URL.createObjectURL(recordedBlob);
+          
+          if (isRecordingMode && !result.isSafe && videoChunksRef.current.length > 0) {
+            // Create a blob from current buffer
+            const clipBlob = new Blob(videoChunksRef.current, { type: 'video/webm' });
+            videoUrl = URL.createObjectURL(clipBlob);
+            
+            // Optional: Clear buffer after capture to avoid duplicate clips for same event immediately? 
+            // For now, we keep it to allow continuous context if hazard persists.
           }
           
           onNewAnalysis({
@@ -175,12 +284,9 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
             thumbnail: imageSrc,
             videoUrl
           });
+
         } catch (e) {
           console.error("Analysis loop error", e);
-          if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-            mediaRecorder.stop();
-            setIsRecordingActive(false);
-          }
         } finally {
           setIsAnalyzing(false);
         }
@@ -193,10 +299,12 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
       if (intervalId) clearInterval(intervalId);
       setIsMonitoring(false);
       setIsAnalyzing(false);
-      setIsRecordingActive(false);
+      setIsSilenced(false);
+      setPredictions([]);
+      setAnalysisHistory([]);
     } else {
       setIsMonitoring(true);
-      // Initialize Audio Context on user interaction to handle browser policies
+      // Initialize Audio Context
       if (!audioContextRef.current) {
         const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
         audioContextRef.current = new AudioContext();
@@ -263,6 +371,23 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
                   className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-orange-500"
                 />
                 <p className="text-xs text-slate-500 mt-1">Alert triggers if score falls below this value.</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2 flex justify-between">
+                  <span>Pre-roll Buffer (Seconds)</span>
+                  <span className="text-blue-400 font-bold">{alertSettings.preRollSeconds}s</span>
+                </label>
+                <input 
+                  type="range" 
+                  min="1" 
+                  max="10" 
+                  step="1"
+                  value={alertSettings.preRollSeconds}
+                  onChange={(e) => setAlertSettings(prev => ({...prev, preRollSeconds: parseInt(e.target.value)}))}
+                  className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                />
+                <p className="text-xs text-slate-500 mt-1">Seconds of video to capture BEFORE a hazard is detected.</p>
               </div>
 
               <div className="flex items-center justify-between p-4 bg-slate-700/50 rounded-lg border border-slate-600">
@@ -348,7 +473,7 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
              );
           })}
 
-          {/* HUD Hazard List - New Feature */}
+          {/* HUD Hazard List */}
           {lastAnalysis && lastAnalysis.hazards.length > 0 && (
             <div className="absolute top-14 right-4 bottom-4 z-20 w-72 flex flex-col gap-2 pointer-events-none overflow-y-auto no-scrollbar mask-gradient-bottom">
               {lastAnalysis.hazards.map((hazard, idx) => (
@@ -377,16 +502,27 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
           )}
 
           {/* Overlay Status */}
-          <div className="absolute top-4 left-4 flex items-center gap-2 z-30">
-            <span className={`animate-pulse w-3 h-3 rounded-full ${isMonitoring ? 'bg-red-500' : 'bg-gray-500'}`}></span>
-            <span className="text-xs font-mono font-bold bg-black/60 px-2 py-1 rounded text-white">
-              {isMonitoring ? "LIVE FEED ACTIVE" : "FEED PAUSED"}
-            </span>
+          <div className="absolute top-4 left-4 flex flex-col gap-1 z-30">
+            <div className="flex items-center gap-2">
+                <span className={`animate-pulse w-3 h-3 rounded-full ${isMonitoring ? 'bg-red-500' : 'bg-gray-500'}`}></span>
+                <span className="text-xs font-mono font-bold bg-black/60 px-2 py-1 rounded text-white">
+                  {isMonitoring ? "LIVE FEED ACTIVE" : "FEED PAUSED"}
+                </span>
+            </div>
             {isRecordingMode && (
-              <span className={`text-xs font-mono font-bold bg-black/60 px-2 py-1 rounded text-white flex items-center gap-1 border border-red-900/50 ${isRecordingActive ? 'text-red-400' : 'text-slate-400'}`}>
-                <Disc className={`w-3 h-3 ${isRecordingActive ? 'animate-pulse text-red-500' : ''}`} />
-                {isRecordingActive ? "REC" : "REC READY"}
+              <span className={`text-xs font-mono font-bold bg-black/60 px-2 py-1 rounded text-white flex items-center gap-1 border border-red-900/50 ${bufferDuration > 0 ? 'text-red-400' : 'text-slate-400'}`}>
+                <Disc className={`w-3 h-3 ${bufferDuration > 0 ? 'animate-pulse text-red-500' : ''}`} />
+                {bufferDuration > 0 ? `REC BUFFER: ${bufferDuration}s` : "INIT BUFFER..."}
               </span>
+            )}
+            
+            {/* Silenced Indicator */}
+            {isSilenced && (
+               <div className="flex items-center gap-2 animate-pulse mt-1">
+                   <span className="text-[10px] font-mono font-bold bg-orange-900/80 px-2 py-1 rounded text-orange-200 flex items-center gap-1 border border-orange-500/50">
+                    <BellOff className="w-3 h-3" /> ALARM SILENCED
+                  </span>
+               </div>
             )}
           </div>
 
@@ -469,6 +605,35 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
                    {lastAnalysis.summary}
                  </p>
                </div>
+
+               {/* Predictive Analysis Section */}
+               {predictions.length > 0 && (
+                 <div className="mb-6 bg-indigo-900/20 rounded-lg p-4 border border-indigo-500/30">
+                   <h3 className="text-xs uppercase text-indigo-400 font-bold mb-3 flex items-center gap-2">
+                     <BrainCircuit className="w-4 h-4" /> Predictive Safety Insights
+                   </h3>
+                   <div className="space-y-3">
+                     {predictions.map((pred, i) => (
+                       <div key={i} className="bg-indigo-950/40 rounded p-3">
+                         <div className="flex justify-between items-center mb-1">
+                           <span className="text-sm font-bold text-indigo-200">{pred.hazardType}</span>
+                           <span className="text-xs font-mono text-indigo-400">{pred.probability}% Conf.</span>
+                         </div>
+                         <div className="w-full bg-indigo-950 rounded-full h-1.5 mb-2">
+                           <div 
+                             className="bg-indigo-500 h-1.5 rounded-full transition-all duration-500"
+                             style={{ width: `${pred.probability}%` }}
+                           ></div>
+                         </div>
+                         <div className="flex items-start gap-2">
+                            <TrendingUp className="w-3 h-3 text-indigo-400 mt-0.5" />
+                            <p className="text-xs text-indigo-300 leading-tight">{pred.reasoning}</p>
+                         </div>
+                       </div>
+                     ))}
+                   </div>
+                 </div>
+               )}
 
                <div className="space-y-3">
                  <h3 className="text-xs uppercase text-slate-500 font-bold mb-2 flex items-center gap-2">
