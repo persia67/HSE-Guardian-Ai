@@ -1,0 +1,7 @@
+{
+  "name": "HSE Guardian AI",
+  "description": "Intelligent Safety Monitoring System analyzing video feeds for HSE violations, hazards, and risk assessment using Gemini AI.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

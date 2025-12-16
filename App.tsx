@@ -1,0 +1,229 @@
+import React, { useState } from 'react';
+import { Shield, Activity, List, Video, AlertOctagon, Download } from 'lucide-react';
+import Monitor from './components/Monitor';
+import SafetyChart from './components/SafetyChart';
+import { LogEntry, AppTab } from './types';
+
+export default function App() {
+  const [activeTab, setActiveTab] = useState<AppTab>(AppTab.MONITOR);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+
+  const handleNewAnalysis = (entry: LogEntry) => {
+    setLogs(prev => [entry, ...prev]);
+  };
+
+  const handleExportCSV = () => {
+    if (logs.length === 0) return;
+
+    // BOM is essential for Excel to read Persian/UTF-8 characters correctly
+    const BOM = "\uFEFF";
+    const headers = ['ID', 'Timestamp', 'Safety Score', 'Status', 'Summary', 'Hazards'];
+    
+    const csvRows = logs.map(log => {
+      const status = log.isSafe ? 'Safe' : 'Risk Detected';
+      // Flatten hazards into a single string
+      const hazardsDetails = log.hazards.map(h => 
+        `[${h.severity}] ${h.type}: ${h.description} -> Action: ${h.recommendation}`
+      ).join(' | ');
+
+      // Helper to escape CSV special characters
+      const escape = (text: string | number) => `"${String(text).replace(/"/g, '""')}"`;
+
+      return [
+        escape(log.id),
+        escape(log.timestamp),
+        escape(log.safetyScore),
+        escape(status),
+        escape(log.summary),
+        escape(hazardsDetails)
+      ].join(',');
+    });
+
+    const csvContent = BOM + [headers.join(','), ...csvRows].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `hse_report_${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  // Derived Stats
+  const currentScore = logs.length > 0 ? logs[0].safetyScore : 100;
+  const highSeverityCount = logs.length > 0 ? logs[0].hazards.filter(h => h.severity === 'HIGH').length : 0;
+  const totalIncidents = logs.reduce((acc, curr) => acc + curr.hazards.length, 0);
+
+  return (
+    <div className="flex flex-col h-screen bg-slate-900 text-white selection:bg-orange-500 selection:text-white">
+      {/* Header */}
+      <header className="h-16 bg-slate-800 border-b border-slate-700 flex items-center justify-between px-6 shadow-lg z-20">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-gradient-to-br from-orange-500 to-red-600 rounded-lg flex items-center justify-center shadow-lg shadow-orange-900/20">
+            <Shield className="text-white w-6 h-6" />
+          </div>
+          <div>
+            <h1 className="text-lg font-bold tracking-tight text-slate-100">HSE Guardian AI</h1>
+            <p className="text-[10px] uppercase tracking-widest text-slate-400">Intelligent Safety System</p>
+          </div>
+        </div>
+
+        <nav className="flex gap-2">
+          {[
+            { id: AppTab.MONITOR, icon: Video, label: 'Live Monitor' },
+            { id: AppTab.DASHBOARD, icon: Activity, label: 'Dashboard' },
+            { id: AppTab.REPORTS, icon: List, label: 'Logs' },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                activeTab === tab.id
+                  ? 'bg-orange-600 text-white shadow-lg shadow-orange-900/50'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-700'
+              }`}
+            >
+              <tab.icon className="w-4 h-4" />
+              <span className="hidden sm:inline">{tab.label}</span>
+            </button>
+          ))}
+        </nav>
+      </header>
+
+      {/* Main Content Area */}
+      <main className="flex-1 overflow-hidden p-4 sm:p-6 relative">
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-800 via-slate-900 to-black pointer-events-none -z-10"></div>
+        
+        {activeTab === AppTab.MONITOR && (
+          <Monitor onNewAnalysis={handleNewAnalysis} />
+        )}
+
+        {activeTab === AppTab.DASHBOARD && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 h-full overflow-y-auto">
+            {/* KPI Cards */}
+            <div className="md:col-span-3 grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-xl">
+                <div className="text-slate-400 text-sm font-medium mb-1">Current Safety Score</div>
+                <div className={`text-4xl font-black ${currentScore < 60 ? 'text-red-500' : 'text-emerald-500'}`}>
+                  {currentScore}
+                </div>
+              </div>
+              <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-xl">
+                <div className="text-slate-400 text-sm font-medium mb-1">Active High Risks</div>
+                <div className={`text-4xl font-black ${highSeverityCount > 0 ? 'text-red-500 animate-pulse' : 'text-slate-200'}`}>
+                  {highSeverityCount}
+                </div>
+              </div>
+              <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-xl">
+                <div className="text-slate-400 text-sm font-medium mb-1">Total Hazards Detected</div>
+                <div className="text-4xl font-black text-blue-400">
+                  {totalIncidents}
+                </div>
+              </div>
+            </div>
+
+            {/* Chart Area */}
+            <div className="md:col-span-2 bg-slate-800 rounded-xl border border-slate-700 p-6 shadow-xl flex flex-col min-h-[300px]">
+              <h3 className="text-lg font-bold text-slate-200 mb-4">Safety Score Trend</h3>
+              <div className="flex-1">
+                <SafetyChart data={[...logs].reverse()} />
+              </div>
+            </div>
+
+            {/* Recent Alerts Feed */}
+            <div className="bg-slate-800 rounded-xl border border-slate-700 p-6 shadow-xl flex flex-col h-full overflow-hidden">
+              <h3 className="text-lg font-bold text-slate-200 mb-4 flex items-center gap-2">
+                <AlertOctagon className="text-orange-500 w-5 h-5"/> Recent Alerts
+              </h3>
+              <div className="flex-1 overflow-y-auto space-y-3 pr-2 scrollbar-thin">
+                {logs.length === 0 ? (
+                  <p className="text-slate-500 text-center py-4">No data yet.</p>
+                ) : (
+                  logs.slice(0, 10).map((log) => (
+                    log.hazards.length > 0 && (
+                      <div key={log.id} className="bg-slate-700/50 p-3 rounded border-l-2 border-orange-500">
+                        <div className="flex justify-between items-center mb-1">
+                           <span className="text-xs text-slate-400">{log.timestamp}</span>
+                           <span className="text-xs font-bold bg-orange-500/20 text-orange-400 px-2 rounded">
+                             Score: {log.safetyScore}
+                           </span>
+                        </div>
+                        <div className="space-y-1">
+                          {log.hazards.map((h, i) => (
+                             <div key={i} className="text-sm text-slate-200 rtl-text text-right">
+                               • {h.type}
+                             </div>
+                          ))}
+                        </div>
+                      </div>
+                    )
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === AppTab.REPORTS && (
+          <div className="h-full overflow-y-auto pr-2 scrollbar-thin max-w-5xl mx-auto">
+             <div className="flex justify-between items-center mb-6 border-b border-slate-700 pb-2">
+               <h2 className="text-2xl font-bold text-slate-100">Full Incident Log</h2>
+               <button 
+                 onClick={handleExportCSV}
+                 disabled={logs.length === 0}
+                 className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium shadow-md"
+               >
+                 <Download className="w-4 h-4" /> Export CSV
+               </button>
+             </div>
+
+             <div className="space-y-4">
+                {logs.length === 0 ? (
+                  <div className="text-center py-12 text-slate-500 bg-slate-800/50 rounded-xl border border-dashed border-slate-700">
+                    No logs recorded yet. Start monitoring to generate reports.
+                  </div>
+                ) : (
+                  logs.map((log) => (
+                    <div key={log.id} className="bg-slate-800 rounded-xl overflow-hidden border border-slate-700 shadow-md flex flex-col md:flex-row">
+                      <div className="w-full md:w-48 h-32 md:h-auto bg-black relative shrink-0">
+                        {log.thumbnail && (
+                          <img src={log.thumbnail} alt="Snap" className="w-full h-full object-cover opacity-80" />
+                        )}
+                        <div className="absolute top-2 left-2 bg-black/70 text-white text-xs px-2 py-1 rounded font-mono">
+                          {log.timestamp}
+                        </div>
+                      </div>
+                      <div className="p-4 flex-1">
+                        <div className="flex justify-between items-start mb-2">
+                          <div className="flex gap-2">
+                            <span className={`px-2 py-1 rounded text-xs font-bold ${log.isSafe ? 'bg-emerald-900 text-emerald-400' : 'bg-red-900 text-red-400'}`}>
+                              {log.isSafe ? "SAFE" : "HAZARD"}
+                            </span>
+                            <span className="px-2 py-1 rounded text-xs font-bold bg-slate-700 text-slate-300">
+                              Score: {log.safetyScore}
+                            </span>
+                          </div>
+                        </div>
+                        <p className="text-slate-300 rtl-text mb-3">{log.summary}</p>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                          {log.hazards.map((h, i) => (
+                            <div key={i} className="text-sm bg-slate-700/30 p-2 rounded rtl-text border-r-2 border-slate-600">
+                              <span className="text-orange-400 font-bold block mb-1">{h.type}</span>
+                              <span className="text-slate-400">{h.recommendation}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+             </div>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
