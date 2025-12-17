@@ -1,15 +1,20 @@
 import React, { useState } from 'react';
-import { Shield, Activity, List, Video, AlertOctagon, Download, Sparkles, FileText, Loader2, PlayCircle } from 'lucide-react';
+import { Shield, Activity, List, Video, AlertOctagon, Download, Sparkles, FileText, Loader2, PlayCircle, MapPin, ExternalLink, Navigation } from 'lucide-react';
 import Monitor from './components/Monitor';
 import SafetyChart from './components/SafetyChart';
-import { LogEntry, AppTab } from './types';
-import { generateSessionReport } from './services/geminiService';
+import { LogEntry, AppTab, GroundingChunk } from './types';
+import { generateSessionReport, findNearbyEmergencyServices } from './services/geminiService';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>(AppTab.MONITOR);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [aiReport, setAiReport] = useState<string | null>(null);
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  
+  // Resources Tab State
+  const [emergencyText, setEmergencyText] = useState<string | null>(null);
+  const [groundingChunks, setGroundingChunks] = useState<GroundingChunk[]>([]);
+  const [isLocating, setIsLocating] = useState(false);
 
   const handleNewAnalysis = (entry: LogEntry) => {
     setLogs(prev => [entry, ...prev]);
@@ -69,6 +74,38 @@ export default function App() {
     }
   };
 
+  const handleLocateServices = () => {
+    if (!navigator.geolocation) {
+      alert("Geolocation is not supported by your browser");
+      return;
+    }
+
+    setIsLocating(true);
+    setEmergencyText(null);
+    setGroundingChunks([]);
+
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        try {
+          const { latitude, longitude } = position.coords;
+          const result = await findNearbyEmergencyServices(latitude, longitude);
+          setEmergencyText(result.text);
+          setGroundingChunks(result.chunks);
+        } catch (err) {
+          console.error(err);
+          setEmergencyText("Failed to retrieve emergency data.");
+        } finally {
+          setIsLocating(false);
+        }
+      },
+      (error) => {
+        console.error(error);
+        setIsLocating(false);
+        setEmergencyText("Unable to retrieve location. Please allow location access.");
+      }
+    );
+  };
+
   // Derived Stats
   const currentScore = logs.length > 0 ? logs[0].safetyScore : 100;
   const highSeverityCount = logs.length > 0 ? logs[0].hazards.filter(h => h.severity === 'HIGH').length : 0;
@@ -93,6 +130,7 @@ export default function App() {
             { id: AppTab.MONITOR, icon: Video, label: 'Live Monitor' },
             { id: AppTab.DASHBOARD, icon: Activity, label: 'Dashboard' },
             { id: AppTab.REPORTS, icon: List, label: 'Logs' },
+            { id: AppTab.RESOURCES, icon: MapPin, label: 'Resources' },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -304,6 +342,87 @@ export default function App() {
                   ))
                 )}
              </div>
+          </div>
+        )}
+
+        {activeTab === AppTab.RESOURCES && (
+          <div className="h-full overflow-y-auto pr-2 scrollbar-thin max-w-5xl mx-auto">
+            <div className="mb-6 border-b border-slate-700 pb-4">
+              <h2 className="text-2xl font-bold text-slate-100 flex items-center gap-2">
+                 <Navigation className="w-6 h-6 text-blue-500" /> Emergency & Safety Resources
+              </h2>
+              <p className="text-slate-400 text-sm mt-1">
+                Locate nearest medical centers, fire stations, and industrial safety equipment suppliers using Google Maps Grounding.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+               <div className="lg:col-span-1">
+                 <div className="bg-slate-800 rounded-xl p-6 border border-slate-700 shadow-lg">
+                    <h3 className="text-lg font-bold text-white mb-4">Location Services</h3>
+                    <p className="text-sm text-slate-400 mb-6">
+                      Click the button below to allow geolocation access. We will find relevant safety resources based on your current coordinates.
+                    </p>
+                    <button 
+                      onClick={handleLocateServices}
+                      disabled={isLocating}
+                      className="w-full flex items-center justify-center gap-2 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-bold transition-all shadow-lg shadow-blue-900/50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isLocating ? <Loader2 className="w-5 h-5 animate-spin" /> : <MapPin className="w-5 h-5" />}
+                      {isLocating ? "Locating..." : "Find Nearby Resources"}
+                    </button>
+                 </div>
+               </div>
+
+               <div className="lg:col-span-2">
+                 {emergencyText ? (
+                   <div className="space-y-6">
+                     <div className="bg-slate-800/80 rounded-xl p-6 border border-slate-700 shadow-lg">
+                       <h3 className="text-sm uppercase font-bold text-blue-400 mb-3 flex items-center gap-2">
+                         <Sparkles className="w-4 h-4" /> AI Recommendation
+                       </h3>
+                       <div className="prose prose-invert prose-sm max-w-none text-slate-200 whitespace-pre-wrap leading-relaxed">
+                         {emergencyText}
+                       </div>
+                     </div>
+                     
+                     {groundingChunks.length > 0 && (
+                       <div>
+                         <h3 className="text-sm uppercase font-bold text-slate-500 mb-3">Verified Locations</h3>
+                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                           {groundingChunks.map((chunk, idx) => {
+                             const mapData = chunk.maps;
+                             if (!mapData) return null;
+                             return (
+                               <a 
+                                 key={idx}
+                                 href={mapData.uri}
+                                 target="_blank"
+                                 rel="noopener noreferrer"
+                                 className="flex items-center justify-between p-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg group transition-colors"
+                               >
+                                 <div className="flex items-center gap-3">
+                                   <div className="w-8 h-8 rounded-full bg-blue-900/30 flex items-center justify-center text-blue-400">
+                                     <MapPin className="w-4 h-4" />
+                                   </div>
+                                   <span className="font-bold text-slate-200 text-sm">{mapData.title}</span>
+                                 </div>
+                                 <ExternalLink className="w-4 h-4 text-slate-500 group-hover:text-white transition-colors" />
+                               </a>
+                             )
+                           })}
+                         </div>
+                       </div>
+                     )}
+                   </div>
+                 ) : (
+                   <div className="h-64 flex flex-col items-center justify-center text-slate-600 border-2 border-dashed border-slate-800 rounded-xl">
+                      <Navigation className="w-12 h-12 mb-2 opacity-50" />
+                      <p>Waiting for location request...</p>
+                   </div>
+                 )}
+               </div>
+            </div>
           </div>
         )}
       </main>

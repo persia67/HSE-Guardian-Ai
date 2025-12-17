@@ -1,8 +1,8 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import Webcam from 'react-webcam';
-import { Camera, AlertTriangle, CheckCircle, Pause, Play, CameraOff, Settings, Volume2, VolumeX, Bell, BellOff, X, Zap, List, Disc, Video, BrainCircuit, TrendingUp, Filter, ChevronDown, Smartphone, MessageSquare, Grid, Check, Monitor as MonitorIcon } from 'lucide-react';
+import { Camera, AlertTriangle, CheckCircle, Pause, Play, CameraOff, Settings, Volume2, VolumeX, Bell, BellOff, X, Zap, List, Disc, Video, BrainCircuit, TrendingUp, Filter, ChevronDown, Smartphone, MessageSquare, Grid, Check, Monitor as MonitorIcon, Sliders, Eye, ZapOff } from 'lucide-react';
 import { analyzeSafetyImage } from '../services/geminiService';
-import { SafetyAnalysis, LogEntry } from '../types';
+import { SafetyAnalysis, LogEntry, Hazard } from '../types';
 
 interface MonitorProps {
   onNewAnalysis: (analysis: LogEntry) => void;
@@ -17,6 +17,7 @@ interface AlertSettings {
   preRollSeconds: number;
   smsEnabled: boolean;
   phoneNumber: string;
+  categoryThresholds: Record<string, number>;
 }
 
 interface Prediction {
@@ -33,6 +34,11 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
   const [isRecordingMode, setIsRecordingMode] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [currentAnalysisCameraId, setCurrentAnalysisCameraId] = useState<string | null>(null);
+  
+  // Smart Switching State
+  const [isSmartMode, setIsSmartMode] = useState(true);
+  const [cameraLastCheckTime, setCameraLastCheckTime] = useState<Record<string, number>>({});
+  const [cameraHazardLevel, setCameraHazardLevel] = useState<Record<string, number>>({}); // 0=Safe, 1=Low, 2=Med, 3=High
   
   // Store the last analysis per camera ID
   const [cameraAnalyses, setCameraAnalyses] = useState<Record<string, SafetyAnalysis>>({});
@@ -60,7 +66,15 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
     soundEnabled: true,
     preRollSeconds: 3, 
     smsEnabled: false,
-    phoneNumber: ''
+    phoneNumber: '',
+    categoryThresholds: {
+      'PPE': 60,
+      'MACHINERY': 70,
+      'HOUSEKEEPING': 50,
+      'FIRE': 60,
+      'BEHAVIOR': 50,
+      'OTHER': 50
+    }
   });
   const [isAlertActive, setIsAlertActive] = useState(false);
   const [isSilenced, setIsSilenced] = useState(false);
@@ -73,7 +87,7 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
   const oscillatorRef = useRef<OscillatorNode | null>(null);
   const gainNodeRef = useRef<GainNode | null>(null);
 
-  // Round Robin Index
+  // Round Robin Index (Fallback)
   const cameraCycleIndex = useRef(0);
 
   // Device Enumeration
@@ -148,31 +162,41 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
   }, []);
 
   // Check thresholds
-  const checkAlerts = useCallback((analysis: SafetyAnalysis) => {
+  const checkAlerts = useCallback((analysis: SafetyAnalysis, deviceId: string) => {
     let shouldTrigger = false;
+    let maxSeverity = 0; // 0=Safe, 1=Low, 2=Med, 3=High
 
     // 1. Check Safety Score
     if (analysis.safetyScore < alertSettings.minSafetyScore) {
       shouldTrigger = true;
     }
 
-    // 2. Check Severity Level
-    const severityWeight: Record<string, number> = { 'SAFE': 0, 'LOW': 1, 'MEDIUM': 2, 'HIGH': 3 };
+    // 2. Check Severity Level & Map to Int
+    const severityMap: Record<string, number> = { 'SAFE': 0, 'LOW': 1, 'MEDIUM': 2, 'HIGH': 3 };
+    
+    // Determine max severity of valid hazards
+    analysis.hazards.forEach(h => {
+        const sev = severityMap[h.severity] || 0;
+        if (sev > maxSeverity) maxSeverity = sev;
+    });
+
+    // Update the severity map for this camera (Used for Smart Switching)
+    setCameraHazardLevel(prev => ({
+        ...prev,
+        [deviceId]: maxSeverity
+    }));
+
+    // Trigger Logic
     const triggerThresholds: Record<SeverityTrigger, number> = { 
       'OFF': 99, 
       'LOW': 1,
       'MEDIUM': 2, 
       'HIGH': 3 
     };
-
     const userThreshold = triggerThresholds[alertSettings.minSeverityTrigger];
 
-    if (userThreshold < 99) {
-      const hasSevereHazard = analysis.hazards.some(h => {
-        const weight = severityWeight[h.severity] || 0;
-        return weight >= userThreshold;
-      });
-      if (hasSevereHazard) shouldTrigger = true;
+    if (userThreshold < 99 && maxSeverity >= userThreshold) {
+      shouldTrigger = true;
     }
 
     // 3. SMS Alert Logic
@@ -197,13 +221,6 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
         setIsAlertActive(true);
         startAlarm();
       }
-    } else {
-      // Only turn off if ALL cameras are safe (simplified: we just check current analysis)
-      // In multi-camera, we might want to keep alarm on if ANY camera is unsafe.
-      // For now, this logic resets per analysis.
-      // Improvement: Check global state of all cameras? 
-      // Let's stick to: Alarm triggers on hazard. User acknowledges to silence.
-      // Automatic turn off is tricky in multi-cam.
     }
   }, [alertSettings, isAlertActive, isSilenced, startAlarm, stopAlarm]);
 
@@ -213,13 +230,105 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
     setIsSilenced(true);
   };
 
+  const generatePredictions = (current: SafetyAnalysis, history: SafetyAnalysis[]) => {
+    const newPredictions: Prediction[] = [];
+    
+    // 1. Fatigue Prediction logic
+    const recentScores = [...history, current].slice(-5).map(h => h.safetyScore);
+    const avgScore = recentScores.reduce((a, b) => a + b, 0) / recentScores.length;
+    
+    if (history.length > 2 && avgScore < 70 && avgScore > 50) {
+       newPredictions.push({
+         hazardType: "Worker Fatigue / Decreased Attention",
+         probability: 75,
+         reasoning: "Consistent drop in safety compliance observed over last 5 intervals."
+       });
+    }
+
+    // 2. Pattern Matching (Helmet)
+    const helmetViolations = [...history, current].filter(h => 
+      h.hazards.some(hz => hz.type.toLowerCase().includes('helmet') || hz.type.toLowerCase().includes('head'))
+    ).length;
+
+    if (helmetViolations >= 2) {
+      newPredictions.push({
+        hazardType: "High Risk of Head Injury",
+        probability: Math.min(99, 85 + (helmetViolations * 2)),
+        reasoning: "Repeated PPE (Helmet) violations detected in short succession."
+      });
+    }
+    
+    // 3. Housekeeping Logic
+    const tripHazards = current.hazards.filter(h => h.type.toLowerCase().includes('trip') || h.type.toLowerCase().includes('housekeeping'));
+    if (tripHazards.length > 0) {
+       newPredictions.push({
+         hazardType: "Area Congestion / Blocked Access",
+         probability: 60,
+         reasoning: "Current trip hazards suggest deteriorating housekeeping standards."
+       });
+    }
+    
+    // 4. Default Safe Prediction
+    if (current.isSafe && history.length > 5 && avgScore > 90) {
+       newPredictions.push({
+         hazardType: "Sustained Safe Operations",
+         probability: 95,
+         reasoning: "Stable high safety scores indicate controlled environment."
+       });
+    }
+
+    setPredictions(newPredictions);
+  };
+
+  /**
+   * Smart Camera Selection Algorithm
+   * Calculates a priority score for each camera to decide which one to analyze next.
+   * Priority = (Seconds since last check) + (Hazard Level * Multiplier)
+   */
+  const getNextSmartCamera = useCallback((): string => {
+    if (activeDeviceIds.length === 0) return '';
+    if (activeDeviceIds.length === 1) return activeDeviceIds[0];
+
+    const now = Date.now();
+    let bestCandidate = activeDeviceIds[0];
+    let maxPriority = -1;
+
+    activeDeviceIds.forEach(id => {
+        const lastCheck = cameraLastCheckTime[id] || 0;
+        const secondsSinceCheck = (now - lastCheck) / 1000;
+        
+        // Hazard weight: 0 (Safe) to 3 (High). 
+        // A high hazard gives a massive boost (e.g., 3 * 20 = 60 priority points),
+        // effectively making the AI "stare" at the hazard until it resolves,
+        // but eventually (after ~60 seconds of neglect) other cameras will catch up.
+        const hazardWeight = (cameraHazardLevel[id] || 0) * 15;
+
+        const priority = secondsSinceCheck + hazardWeight;
+
+        if (priority > maxPriority) {
+            maxPriority = priority;
+            bestCandidate = id;
+        }
+    });
+
+    return bestCandidate;
+  }, [activeDeviceIds, cameraLastCheckTime, cameraHazardLevel]);
+
+
   const captureAndAnalyze = useCallback(async () => {
     if (activeDeviceIds.length === 0 || isAnalyzing) return;
 
-    // Round Robin Selection
-    const nextIndex = (cameraCycleIndex.current + 1) % activeDeviceIds.length;
-    cameraCycleIndex.current = nextIndex;
-    const deviceId = activeDeviceIds[nextIndex];
+    let deviceId: string;
+
+    if (isSmartMode) {
+        deviceId = getNextSmartCamera();
+    } else {
+        // Simple Round Robin Fallback
+        const nextIndex = (cameraCycleIndex.current + 1) % activeDeviceIds.length;
+        cameraCycleIndex.current = nextIndex;
+        deviceId = activeDeviceIds[nextIndex];
+    }
+
     const webcam = webcamRefs.current[deviceId];
 
     if (webcam) {
@@ -236,27 +345,39 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
           const endTime = performance.now();
           setLatency(Math.round(endTime - startTime));
 
-          // Find camera label
-          const camLabel = devices.find(d => d.deviceId === deviceId)?.label || `Camera ${nextIndex + 1}`;
+          // Filter hazards based on custom thresholds
+          const filteredHazards = result.hazards.filter(h => {
+             const threshold = alertSettings.categoryThresholds[h.category] || 50;
+             const conf = h.confidence !== undefined ? h.confidence : 100; 
+             return conf >= threshold;
+          });
 
-          setCameraAnalyses(prev => ({ ...prev, [deviceId]: result }));
-          checkAlerts(result);
+          const isSafe = filteredHazards.length === 0 && result.safetyScore > 80;
+          
+          const filteredResult: SafetyAnalysis = {
+             ...result,
+             hazards: filteredHazards,
+             isSafe: isSafe
+          };
+
+          const camLabel = devices.find(d => d.deviceId === deviceId)?.label || `Camera`;
+
+          // Update State
+          setCameraAnalyses(prev => ({ ...prev, [deviceId]: filteredResult }));
+          setCameraLastCheckTime(prev => ({ ...prev, [deviceId]: Date.now() }));
+          
+          checkAlerts(filteredResult, deviceId);
           
           setAnalysisHistory(prev => {
-             const updated = [...prev, result].slice(-10);
-             // generatePredictions(result, updated); // Simplified: Predictions based on global history
+             const updated = [...prev, filteredResult].slice(-10);
+             generatePredictions(filteredResult, updated);
              return updated;
           });
 
-          // Only record if single camera mode is active (performance reason)
-          let videoUrl: string | undefined = undefined;
-          // Recording logic omitted for multi-view stability, or we can enable it for the specific cam later.
-          
           onNewAnalysis({
             id: Date.now().toString(),
-            ...result,
+            ...filteredResult,
             thumbnail: imageSrc,
-            videoUrl,
             cameraLabel: camLabel
           });
 
@@ -264,11 +385,10 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
           console.error("Analysis loop error", e);
         } finally {
           setIsAnalyzing(false);
-          // Don't clear currentAnalysisCameraId immediately so we can see which one was last processed
         }
       }
     }
-  }, [isAnalyzing, onNewAnalysis, checkAlerts, activeDeviceIds, devices]);
+  }, [isAnalyzing, isSmartMode, onNewAnalysis, checkAlerts, activeDeviceIds, devices, alertSettings.categoryThresholds, getNextSmartCamera]);
 
   const toggleMonitoring = () => {
     if (isMonitoring) {
@@ -358,7 +478,7 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
               </button>
             </div>
             
-            {/* Settings Content Same as before... */}
+            {/* Settings Content */}
             <div className="space-y-6">
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-2 flex justify-between">
@@ -366,6 +486,44 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
                   <span className="text-orange-400 font-bold">{alertSettings.minSafetyScore}</span>
                 </label>
                 <input type="range" min="0" max="100" value={alertSettings.minSafetyScore} onChange={(e) => setAlertSettings(prev => ({...prev, minSafetyScore: parseInt(e.target.value)}))} className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-orange-500" />
+              </div>
+
+              {/* Confidence Thresholds */}
+              <div className="bg-slate-700/30 p-4 rounded-lg border border-slate-600">
+                <h4 className="text-slate-300 font-bold mb-3 text-xs uppercase flex items-center gap-2">
+                  <Sliders className="w-4 h-4" /> Hazard Confidence Thresholds
+                </h4>
+                <p className="text-xs text-slate-400 mb-4">Set the minimum confidence required to trigger an alert for each category.</p>
+                <div className="grid grid-cols-1 gap-4">
+                  {Object.keys(alertSettings.categoryThresholds).map(cat => (
+                     <div key={cat}>
+                       <label className="text-xs text-slate-300 font-mono mb-1 flex justify-between">
+                         <span className="flex items-center gap-2">
+                            <span className={`w-2 h-2 rounded-full ${
+                              cat === 'PPE' ? 'bg-blue-500' : 
+                              cat === 'FIRE' ? 'bg-red-500' : 
+                              cat === 'MACHINERY' ? 'bg-orange-500' : 'bg-slate-500'
+                            }`}></span>
+                            {cat}
+                         </span>
+                         <span className="text-indigo-400 font-bold">{alertSettings.categoryThresholds[cat]}%</span>
+                       </label>
+                       <input 
+                         type="range" 
+                         min="0" max="100" 
+                         value={alertSettings.categoryThresholds[cat]}
+                         onChange={(e) => setAlertSettings(prev => ({
+                           ...prev, 
+                           categoryThresholds: {
+                             ...prev.categoryThresholds,
+                             [cat]: parseInt(e.target.value)
+                           }
+                         }))}
+                         className="w-full h-1.5 bg-slate-900 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                       />
+                     </div>
+                  ))}
+                </div>
               </div>
 
               <div className="p-4 bg-slate-700/50 rounded-lg border border-slate-600">
@@ -419,24 +577,54 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
                    />
                    
                    {/* Per-Camera Status Overlay */}
-                   <div className="absolute top-2 left-2 flex items-center gap-2">
+                   <div className="absolute top-2 left-2 flex items-center gap-2 z-20">
                       <div className={`px-2 py-1 rounded text-[10px] font-bold text-white shadow-md backdrop-blur-md ${hasHazard ? 'bg-red-600/80' : 'bg-slate-800/60'}`}>
                         {devices.find(d => d.deviceId === deviceId)?.label.slice(0, 15) || 'Camera'}
                       </div>
+                      
+                      {/* Active Analysis Indicator */}
                       {currentAnalysisCameraId === deviceId && isAnalyzing && (
-                        <div className="w-2 h-2 bg-blue-400 rounded-full animate-ping"></div>
+                        <div className="flex items-center gap-1 bg-blue-600/80 text-white text-[10px] px-2 py-1 rounded shadow-lg backdrop-blur-sm animate-pulse">
+                           <Eye className="w-3 h-3" />
+                           {isSmartMode ? "AI Focus" : "Scanning"}
+                        </div>
                       )}
                    </div>
 
-                   {/* Draw Boxes ONLY for single view or if we want cluttered grid */}
-                   {/* Simplified: Only draw boxes if we have 1 camera, otherwise too messy */}
-                   {activeDeviceIds.length === 1 && camAnalysis && camAnalysis.hazards.map((hazard, idx) => {
+                   {/* Enhanced Bounding Boxes */}
+                   {camAnalysis && camAnalysis.hazards.map((hazard, idx) => {
                       if (!hazard.box_2d) return null;
                       const [ymin, xmin, ymax, xmax] = hazard.box_2d;
+                      
+                      // Severity Styling
+                      const isHigh = hazard.severity === 'HIGH';
+                      const isMed = hazard.severity === 'MEDIUM';
+                      // Colors
+                      const borderColor = isHigh ? 'border-red-500' : isMed ? 'border-orange-500' : 'border-yellow-400';
+                      const bgColor = isHigh ? 'bg-red-500/20' : isMed ? 'bg-orange-500/20' : 'bg-yellow-400/10';
+                      const labelColor = isHigh ? 'bg-red-600' : isMed ? 'bg-orange-500' : 'bg-yellow-500';
+
                       return (
-                         <div key={idx} className={`absolute border-2 ${hazard.severity === 'HIGH' ? 'border-red-500' : 'border-yellow-500'}`}
-                           style={{ top: `${ymin/10}%`, left: `${xmin/10}%`, height: `${(ymax-ymin)/10}%`, width: `${(xmax-xmin)/10}%` }}
-                         />
+                         <div key={`haz-${idx}`} 
+                           className={`absolute z-10 border-2 ${borderColor} ${bgColor} transition-all duration-300 pointer-events-none`}
+                           style={{ 
+                             top: `${ymin/10}%`, 
+                             left: `${xmin/10}%`, 
+                             height: `${(ymax-ymin)/10}%`, 
+                             width: `${(xmax-xmin)/10}%` 
+                           }}
+                         >
+                           <div className="absolute -top-6 left-0 flex flex-col items-start">
+                             <span className={`text-[10px] font-bold text-white px-1.5 py-0.5 rounded shadow-sm whitespace-nowrap ${labelColor}`}>
+                               {hazard.type}
+                             </span>
+                             {hazard.confidence !== undefined && (
+                               <span className="text-[9px] bg-black/60 text-white px-1 rounded-b">
+                                 {hazard.confidence}%
+                               </span>
+                             )}
+                           </div>
+                         </div>
                       )
                    })}
                  </div>
@@ -451,6 +639,12 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
                 <span className="text-xs font-mono font-bold bg-black/60 px-2 py-1 rounded text-white">
                   {isMonitoring ? (activeDeviceIds.length > 1 ? "MULTI-CAM ACTIVE" : "LIVE FEED") : "PAUSED"}
                 </span>
+                
+                {isMonitoring && activeDeviceIds.length > 1 && (
+                  <span className={`text-[10px] font-bold px-2 py-1 rounded text-white border flex items-center gap-1 ${isSmartMode ? 'bg-indigo-600/80 border-indigo-400' : 'bg-slate-700/80 border-slate-500'}`}>
+                    {isSmartMode ? <><BrainCircuit className="w-3 h-3" /> AI DIRECTOR</> : "SEQ SEQUENCE"}
+                  </span>
+                )}
             </div>
           </div>
         </div>
@@ -499,6 +693,19 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
                  </div>
                )}
             </div>
+            
+            {activeDeviceIds.length > 1 && (
+               <button 
+                 onClick={() => setIsSmartMode(!isSmartMode)}
+                 className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs font-bold transition-all ${
+                   isSmartMode ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'bg-slate-700 text-slate-400 hover:text-white'
+                 }`}
+               >
+                 {isSmartMode ? <BrainCircuit className="w-4 h-4" /> : <ZapOff className="w-4 h-4" />}
+                 <span className="hidden sm:inline">{isSmartMode ? "Smart Mode" : "Cycle Mode"}</span>
+               </button>
+            )}
+
             <div className="text-xs font-mono text-slate-500 bg-slate-900 px-2 py-1 rounded">
                {devices.length} AVAIL
             </div>
@@ -555,6 +762,36 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
                    {activeAnalysis.summary}
                  </p>
                </div>
+
+               {/* Predictive Analysis Section */}
+               {predictions.length > 0 && (
+                 <div className="mb-6 bg-indigo-900/20 rounded-lg p-4 border border-indigo-500/30">
+                   <h3 className="text-xs uppercase text-indigo-400 font-bold mb-3 flex items-center gap-2">
+                     <BrainCircuit className="w-4 h-4" /> Predictive Safety Insights
+                   </h3>
+                   <div className="space-y-3">
+                     {predictions.map((pred, i) => (
+                       <div key={i} className="bg-indigo-950/40 rounded p-3">
+                         <div className="flex justify-between items-center mb-1">
+                           <span className="text-sm font-bold text-indigo-200">{pred.hazardType}</span>
+                           <span className="text-xs font-mono text-indigo-400">{pred.probability}% Conf.</span>
+                         </div>
+                         {/* Visual Confidence Bar */}
+                         <div className="w-full bg-indigo-950 rounded-full h-1.5 mb-2">
+                           <div 
+                             className="bg-indigo-500 h-1.5 rounded-full transition-all duration-500"
+                             style={{ width: `${pred.probability}%` }}
+                           ></div>
+                         </div>
+                         <div className="flex items-start gap-2">
+                            <TrendingUp className="w-3 h-3 text-indigo-400 mt-0.5" />
+                            <p className="text-xs text-indigo-300 leading-tight">{pred.reasoning}</p>
+                         </div>
+                       </div>
+                     ))}
+                   </div>
+                 </div>
+               )}
                
                <div className="space-y-3">
                  {activeAnalysis.hazards.map((hazard, idx) => (
@@ -562,7 +799,10 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
                      hazard.severity === 'HIGH' ? 'bg-red-900/20 border-red-500' : 'bg-blue-900/20 border-blue-500'
                    }`}>
                      <div className="flex justify-between items-center mb-2">
-                        <span className="font-bold text-slate-200">{hazard.type}</span>
+                        <div className="flex flex-col">
+                           <span className="font-bold text-slate-200">{hazard.type}</span>
+                           <span className="text-[10px] text-slate-400">{hazard.category} {hazard.confidence && `| ${hazard.confidence}%`}</span>
+                        </div>
                         <span className="text-[10px] uppercase bg-slate-900 px-2 py-1 rounded">{hazard.severity}</span>
                      </div>
                      <p className="rtl-text text-sm text-slate-300">{hazard.description}</p>

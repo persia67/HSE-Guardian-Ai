@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
-import { SafetyAnalysis, LogEntry } from "../types";
+import { SafetyAnalysis, LogEntry, GroundingChunk } from "../types";
 
 // Initialization moved inside functions to prevent global scope crash if process is undefined
 // const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -25,7 +25,13 @@ const analysisSchema: Schema = {
         type: Type.OBJECT,
         properties: {
           type: { type: Type.STRING, description: "Short title of the hazard (e.g., 'Missing Helmet')" },
+          category: { 
+            type: Type.STRING, 
+            enum: ['PPE', 'MACHINERY', 'HOUSEKEEPING', 'FIRE', 'BEHAVIOR', 'OTHER'],
+            description: "The category of the hazard."
+          },
           severity: { type: Type.STRING, enum: ["HIGH", "MEDIUM", "LOW", "SAFE"] },
+          confidence: { type: Type.INTEGER, description: "AI confidence score for this detection (0-100)." },
           description: { type: Type.STRING, description: "Description of the hazard in Persian (Farsi)." },
           recommendation: { type: Type.STRING, description: "Immediate corrective action in Persian (Farsi)." },
           box_2d: { 
@@ -34,7 +40,7 @@ const analysisSchema: Schema = {
             items: { type: Type.INTEGER }
           }
         },
-        required: ["type", "severity", "description", "recommendation", "box_2d"],
+        required: ["type", "category", "severity", "confidence", "description", "recommendation", "box_2d"],
       },
     },
   },
@@ -65,7 +71,9 @@ export const analyzeSafetyImage = async (base64Image: string): Promise<SafetyAna
             IMPORTANT: 
             1. Provide all descriptions, summaries, and recommendations in Persian (Farsi).
             2. Detect specific objects or areas that constitute a hazard and provide bounding boxes (box_2d) for them.
-            3. Determine a safety score based on visual evidence.`,
+            3. Classify each hazard into a category (PPE, MACHINERY, HOUSEKEEPING, FIRE, BEHAVIOR, OTHER).
+            4. Assign a confidence score (0-100) to each detected hazard.
+            5. Determine a safety score based on visual evidence.`,
           },
         ],
       },
@@ -130,5 +138,34 @@ export const generateSessionReport = async (logs: LogEntry[]): Promise<string> =
   } catch (error) {
     console.error("Report Generation Error:", error);
     return "Error generating AI report. Please try again.";
+  }
+};
+
+export const findNearbyEmergencyServices = async (lat: number, lng: number): Promise<{text: string, chunks: GroundingChunk[]}> => {
+  try {
+     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+     const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: "Find the nearest emergency medical centers (hospitals) and fire stations. Provide a brief list with estimated drive times if available. Also look for industrial safety equipment suppliers.",
+      config: {
+        tools: [{googleMaps: {}}],
+        toolConfig: {
+          retrievalConfig: {
+            latLng: {
+              latitude: lat,
+              longitude: lng
+            }
+          }
+        }
+      },
+    });
+    
+    return {
+      text: response.text || "No information found.",
+      chunks: (response.candidates?.[0]?.groundingMetadata?.groundingChunks as GroundingChunk[]) || []
+    };
+  } catch (e) {
+    console.error("Maps Grounding Error", e);
+    return { text: "Error retrieving location data or connecting to service.", chunks: [] };
   }
 };
