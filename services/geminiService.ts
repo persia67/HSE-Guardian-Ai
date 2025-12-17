@@ -1,7 +1,8 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { SafetyAnalysis, LogEntry } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Initialization moved inside functions to prevent global scope crash if process is undefined
+// const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 const analysisSchema: Schema = {
   type: Type.OBJECT,
@@ -42,6 +43,10 @@ const analysisSchema: Schema = {
 
 export const analyzeSafetyImage = async (base64Image: string): Promise<SafetyAnalysis> => {
   try {
+    // Initialize AI client lazily. This ensures the app renders even if env vars are problematic at startup.
+    // The try-catch block will handle any configuration errors gracefully.
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
       contents: {
@@ -86,7 +91,7 @@ export const analyzeSafetyImage = async (base64Image: string): Promise<SafetyAna
       timestamp: new Date().toLocaleTimeString(),
       safetyScore: 0,
       isSafe: false,
-      summary: "Error connecting to AI Safety Officer. Please check connection.",
+      summary: "Error connecting to AI Safety Officer. Please check connection and API Key configuration.",
       hazards: [],
     };
   }
@@ -94,6 +99,9 @@ export const analyzeSafetyImage = async (base64Image: string): Promise<SafetyAna
 
 export const generateSessionReport = async (logs: LogEntry[]): Promise<string> => {
   try {
+    // Initialize AI client lazily
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
     // Filter out heavy base64 images before sending to text model to save tokens
     const textLogs = logs.map(({ thumbnail, ...rest }) => rest);
     

@@ -20,7 +20,7 @@ export default function App() {
 
     // BOM is essential for Excel to read Persian/UTF-8 characters correctly
     const BOM = "\uFEFF";
-    const headers = ['ID', 'Timestamp', 'Safety Score', 'Status', 'Summary', 'Hazards'];
+    const headers = ['ID', 'Timestamp', 'Camera', 'Safety Score', 'Status', 'Summary', 'Hazards'];
     
     const csvRows = logs.map(log => {
       const status = log.isSafe ? 'Safe' : 'Risk Detected';
@@ -30,11 +30,12 @@ export default function App() {
       ).join(' | ');
 
       // Helper to escape CSV special characters
-      const escape = (text: string | number) => `"${String(text).replace(/"/g, '""')}"`;
+      const escape = (text: string | number | undefined) => `"${String(text || '').replace(/"/g, '""')}"`;
 
       return [
         escape(log.id),
         escape(log.timestamp),
+        escape(log.cameraLabel),
         escape(log.safetyScore),
         escape(status),
         escape(log.summary),
@@ -162,7 +163,10 @@ export default function App() {
                     log.hazards.length > 0 && (
                       <div key={log.id} className="bg-slate-700/50 p-3 rounded border-l-2 border-orange-500">
                         <div className="flex justify-between items-center mb-1">
-                           <span className="text-xs text-slate-400">{log.timestamp}</span>
+                           <div className="flex flex-col">
+                             <span className="text-xs text-slate-400">{log.timestamp}</span>
+                             {log.cameraLabel && <span className="text-[10px] text-blue-400 font-bold">{log.cameraLabel}</span>}
+                           </div>
                            <span className="text-xs font-bold bg-orange-500/20 text-orange-400 px-2 rounded">
                              Score: {log.safetyScore}
                            </span>
@@ -261,13 +265,18 @@ export default function App() {
                       </div>
                       <div className="p-4 flex-1">
                         <div className="flex justify-between items-start mb-2">
-                          <div className="flex gap-2">
+                          <div className="flex gap-2 items-center">
                             <span className={`px-2 py-1 rounded text-xs font-bold ${log.isSafe ? 'bg-emerald-900 text-emerald-400' : 'bg-red-900 text-red-400'}`}>
                               {log.isSafe ? "SAFE" : "HAZARD"}
                             </span>
                             <span className="px-2 py-1 rounded text-xs font-bold bg-slate-700 text-slate-300">
                               Score: {log.safetyScore}
                             </span>
+                            {log.cameraLabel && (
+                              <span className="px-2 py-1 rounded text-xs font-bold bg-blue-900/50 text-blue-300 border border-blue-500/30">
+                                {log.cameraLabel}
+                              </span>
+                            )}
                           </div>
                           {log.videoUrl && (
                              <a 
