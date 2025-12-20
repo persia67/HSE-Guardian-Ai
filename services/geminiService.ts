@@ -1,10 +1,9 @@
-import { GoogleGenAI, Type, Schema } from "@google/genai";
+
+import { GoogleGenAI, Type } from "@google/genai";
 import { SafetyAnalysis, LogEntry, GroundingChunk } from "../types";
 
-// Initialization moved inside functions to prevent global scope crash if process is undefined
-// const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
-const analysisSchema: Schema = {
+// Using a plain object for responseSchema as per updated SDK best practices
+const analysisSchema = {
   type: Type.OBJECT,
   properties: {
     safetyScore: {
@@ -49,12 +48,10 @@ const analysisSchema: Schema = {
 
 export const analyzeSafetyImage = async (base64Image: string): Promise<SafetyAnalysis> => {
   try {
-    // Initialize AI client lazily. This ensures the app renders even if env vars are problematic at startup.
-    // The try-catch block will handle any configuration errors gracefully.
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-3-flash-preview", // Updated to Gemini 3 for enhanced safety reasoning
       contents: {
         parts: [
           {
@@ -84,6 +81,7 @@ export const analyzeSafetyImage = async (base64Image: string): Promise<SafetyAna
       },
     });
 
+    // Access .text property directly (not a method)
     if (response.text) {
       const data = JSON.parse(response.text);
       return {
@@ -94,7 +92,6 @@ export const analyzeSafetyImage = async (base64Image: string): Promise<SafetyAna
     throw new Error("No data returned from AI");
   } catch (error) {
     console.error("Gemini Analysis Error:", error);
-    // Return a fallback error state so the UI doesn't crash
     return {
       timestamp: new Date().toLocaleTimeString(),
       safetyScore: 0,
@@ -107,14 +104,12 @@ export const analyzeSafetyImage = async (base64Image: string): Promise<SafetyAna
 
 export const generateSessionReport = async (logs: LogEntry[]): Promise<string> => {
   try {
-    // Initialize AI client lazily
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-    // Filter out heavy base64 images before sending to text model to save tokens
     const textLogs = logs.map(({ thumbnail, ...rest }) => rest);
     
     const response = await ai.models.generateContent({
-      model: "gemini-3-pro-preview", // Using Pro for complex reasoning and summarization
+      model: "gemini-3-pro-preview",
       contents: {
         parts: [{
           text: `You are a Senior HSE Manager. Analyze the following JSON logs from today's safety monitoring session.
@@ -134,6 +129,7 @@ export const generateSessionReport = async (logs: LogEntry[]): Promise<string> =
       }
     });
 
+    // Directly return .text property
     return response.text || "Could not generate report.";
   } catch (error) {
     console.error("Report Generation Error:", error);
@@ -145,7 +141,7 @@ export const findNearbyEmergencyServices = async (lat: number, lng: number): Pro
   try {
      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
      const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-2.5-flash", // Maps grounding requires 2.5 series
       contents: "Find the nearest emergency medical centers (hospitals) and fire stations. Provide a brief list with estimated drive times if available. Also look for industrial safety equipment suppliers.",
       config: {
         tools: [{googleMaps: {}}],

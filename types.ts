@@ -1,33 +1,43 @@
 export interface Hazard {
-  type: string; // e.g., "No Helmet", "Trip Hazard"
+  type: string;
   category: 'PPE' | 'MACHINERY' | 'HOUSEKEEPING' | 'FIRE' | 'BEHAVIOR' | 'OTHER';
   severity: 'HIGH' | 'MEDIUM' | 'LOW' | 'SAFE';
-  confidence: number; // 0-100
-  description: string; // Detailed description in Persian
-  recommendation: string; // Action item in Persian
-  box_2d?: number[]; // [ymin, xmin, ymax, xmax] normalized 0-1000 scale
+  confidence: number;
+  description: string;
+  recommendation: string;
+  box_2d?: number[];
 }
 
 export interface SafetyAnalysis {
   timestamp: string;
-  safetyScore: number; // 0-100
+  safetyScore: number;
   hazards: Hazard[];
-  summary: string; // Persian summary
+  summary: string;
   isSafe: boolean;
 }
 
 export interface LogEntry extends SafetyAnalysis {
   id: string;
-  thumbnail?: string; // Base64 snapshot
-  videoUrl?: string; // Blob URL of the recorded clip if available
-  cameraLabel?: string; // Name of the camera source
+  thumbnail?: string;
+  videoUrl?: string;
+  cameraLabel?: string;
+  deviceId?: string; // برای شناسایی منبع ثبت داده
+}
+
+export interface ConnectedDevice {
+  id: string;
+  name: string;
+  type: 'Desktop' | 'Android';
+  lastSeen: string;
+  status: 'Online' | 'Offline';
 }
 
 export enum AppTab {
   DASHBOARD = 'dashboard',
   MONITOR = 'monitor',
   REPORTS = 'reports',
-  RESOURCES = 'resources'
+  RESOURCES = 'resources',
+  SETTINGS = 'settings'
 }
 
 export interface GroundingChunk {

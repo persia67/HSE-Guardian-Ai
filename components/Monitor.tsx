@@ -630,6 +630,7 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
                       const borderColor = isHigh ? 'border-red-500' : isMed ? 'border-orange-500' : 'border-yellow-400';
                       const bgColor = isHigh ? 'bg-red-500/20' : isMed ? 'bg-orange-500/20' : 'bg-yellow-400/10';
                       const labelColor = isHigh ? 'bg-red-600' : isMed ? 'bg-orange-500' : 'bg-yellow-500';
+                      const dotColor = isHigh ? 'bg-white shadow-[0_0_8px_rgba(255,255,255,0.8)] animate-pulse' : isMed ? 'bg-orange-200' : 'bg-yellow-100';
 
                       return (
                          <div key={`haz-${idx}`} 
@@ -642,7 +643,8 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
                            }}
                          >
                            <div className="absolute -top-6 left-0 flex flex-col items-start">
-                             <span className={`text-[10px] font-bold text-white px-1.5 py-0.5 rounded shadow-sm whitespace-nowrap ${labelColor}`}>
+                             <span className={`text-[10px] font-bold text-white px-1.5 py-0.5 rounded shadow-sm whitespace-nowrap flex items-center gap-1.5 ${labelColor}`}>
+                               <span className={`w-2 h-2 rounded-full border border-black/10 ${dotColor}`}></span>
                                {hazard.type}
                              </span>
                              {hazard.confidence !== undefined && (
