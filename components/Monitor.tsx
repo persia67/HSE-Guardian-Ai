@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import Webcam from 'react-webcam';
-import { Camera, AlertTriangle, CheckCircle, Pause, Play, CameraOff, Settings, Volume2, VolumeX, Bell, BellOff, X, Zap, List, Disc, Video, BrainCircuit, TrendingUp, Filter, ChevronDown, Smartphone, MessageSquare, Grid, Check, Monitor as MonitorIcon, Sliders, Eye, ZapOff } from 'lucide-react';
+import { Camera, AlertTriangle, CheckCircle, Pause, Play, CameraOff, Settings, Volume2, VolumeX, Bell, BellOff, X, Zap, List, Disc, Video, BrainCircuit, TrendingUp, Filter, ChevronDown, Smartphone, MessageSquare, Grid, Check, Monitor as MonitorIcon, Sliders, Eye, ZapOff, Timer } from 'lucide-react';
 import { analyzeSafetyImage } from '../services/geminiService';
 import { SafetyAnalysis, LogEntry, Hazard } from '../types';
 
@@ -38,6 +38,7 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
   // Smart Switching State
   const [isSmartMode, setIsSmartMode] = useState(true);
   const [cameraLastCheckTime, setCameraLastCheckTime] = useState<Record<string, number>>({});
+  const [cameraLastAlertTime, setCameraLastAlertTime] = useState<Record<string, number>>({}); // Track last critical alert time
   const [cameraHazardLevel, setCameraHazardLevel] = useState<Record<string, number>>({}); // 0=Safe, 1=Low, 2=Med, 3=High
   
   // Store the last analysis per camera ID
@@ -186,6 +187,11 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
         [deviceId]: maxSeverity
     }));
 
+    // Detect critical incidents for retention
+    if (maxSeverity === 3) { // HIGH
+       setCameraLastAlertTime(prev => ({ ...prev, [deviceId]: Date.now() }));
+    }
+
     // Trigger Logic
     const triggerThresholds: Record<SeverityTrigger, number> = { 
       'OFF': 99, 
@@ -282,8 +288,7 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
 
   /**
    * Smart Camera Selection Algorithm
-   * Calculates a priority score for each camera to decide which one to analyze next.
-   * Priority = (Seconds since last check) + (Hazard Level * Multiplier)
+   * Priority = (Seconds since last check) + (Hazard Level * Multiplier) + (Incident Retention)
    */
   const getNextSmartCamera = useCallback((): string => {
     if (activeDeviceIds.length === 0) return '';
@@ -298,12 +303,19 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
         const secondsSinceCheck = (now - lastCheck) / 1000;
         
         // Hazard weight: 0 (Safe) to 3 (High). 
-        // A high hazard gives a massive boost (e.g., 3 * 20 = 60 priority points),
-        // effectively making the AI "stare" at the hazard until it resolves,
-        // but eventually (after ~60 seconds of neglect) other cameras will catch up.
         const hazardWeight = (cameraHazardLevel[id] || 0) * 15;
 
-        const priority = secondsSinceCheck + hazardWeight;
+        // Retention Weight: Prioritize cameras with recent critical alerts for 60 seconds
+        const lastAlert = cameraLastAlertTime[id] || 0;
+        const secondsSinceAlert = (now - lastAlert) / 1000;
+        let retentionWeight = 0;
+        
+        if (secondsSinceAlert < 60) {
+            // Decaying weight: 60 at t=0, 0 at t=60. Multiplier ensures it overrides simple round-robin
+            retentionWeight = (60 - secondsSinceAlert) * 1.5; 
+        }
+
+        const priority = secondsSinceCheck + hazardWeight + retentionWeight;
 
         if (priority > maxPriority) {
             maxPriority = priority;
@@ -312,7 +324,7 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
     });
 
     return bestCandidate;
-  }, [activeDeviceIds, cameraLastCheckTime, cameraHazardLevel]);
+  }, [activeDeviceIds, cameraLastCheckTime, cameraHazardLevel, cameraLastAlertTime]);
 
 
   const captureAndAnalyze = useCallback(async () => {
@@ -565,6 +577,11 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
                // Get local analysis for this camera if exists
                const camAnalysis = cameraAnalyses[deviceId];
                const hasHazard = camAnalysis && !camAnalysis.isSafe;
+               
+               // Check retention status
+               const lastAlert = cameraLastAlertTime[deviceId] || 0;
+               const timeSinceAlert = (Date.now() - lastAlert) / 1000;
+               const isRetentionActive = timeSinceAlert < 60;
 
                return (
                  <div key={deviceId} className="relative w-full h-full border border-slate-800 overflow-hidden group">
@@ -577,17 +594,27 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
                    />
                    
                    {/* Per-Camera Status Overlay */}
-                   <div className="absolute top-2 left-2 flex items-center gap-2 z-20">
-                      <div className={`px-2 py-1 rounded text-[10px] font-bold text-white shadow-md backdrop-blur-md ${hasHazard ? 'bg-red-600/80' : 'bg-slate-800/60'}`}>
-                        {devices.find(d => d.deviceId === deviceId)?.label.slice(0, 15) || 'Camera'}
-                      </div>
-                      
-                      {/* Active Analysis Indicator */}
-                      {currentAnalysisCameraId === deviceId && isAnalyzing && (
-                        <div className="flex items-center gap-1 bg-blue-600/80 text-white text-[10px] px-2 py-1 rounded shadow-lg backdrop-blur-sm animate-pulse">
-                           <Eye className="w-3 h-3" />
-                           {isSmartMode ? "AI Focus" : "Scanning"}
+                   <div className="absolute top-2 left-2 flex flex-col gap-1 z-20">
+                      <div className="flex items-center gap-2">
+                        <div className={`px-2 py-1 rounded text-[10px] font-bold text-white shadow-md backdrop-blur-md ${hasHazard ? 'bg-red-600/80' : 'bg-slate-800/60'}`}>
+                          {devices.find(d => d.deviceId === deviceId)?.label.slice(0, 15) || 'Camera'}
                         </div>
+                        
+                        {/* Active Analysis Indicator */}
+                        {currentAnalysisCameraId === deviceId && isAnalyzing && (
+                          <div className="flex items-center gap-1 bg-blue-600/80 text-white text-[10px] px-2 py-1 rounded shadow-lg backdrop-blur-sm animate-pulse">
+                             <Eye className="w-3 h-3" />
+                             {isSmartMode ? "AI Focus" : "Scanning"}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Retention Badge */}
+                      {isRetentionActive && isSmartMode && (
+                         <div className="flex items-center gap-1 bg-orange-600/90 text-white text-[10px] px-2 py-1 rounded shadow-lg backdrop-blur-sm animate-pulse w-fit">
+                            <Timer className="w-3 h-3" />
+                            RETENTION
+                         </div>
                       )}
                    </div>
 
