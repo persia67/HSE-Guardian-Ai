@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import Webcam from 'react-webcam';
-import { Camera, AlertTriangle, CheckCircle, Pause, Play, CameraOff, Settings, Volume2, VolumeX, Bell, BellOff, X, Zap, List, Disc, Video, BrainCircuit, TrendingUp, Filter, ChevronDown, Smartphone, MessageSquare, Grid, Check, Monitor as MonitorIcon, Sliders, Eye, ZapOff, Timer } from 'lucide-react';
+import { Camera, AlertTriangle, CheckCircle, Pause, Play, CameraOff, Settings, Volume2, VolumeX, Bell, BellOff, X, Zap, List, Disc, Video, BrainCircuit, TrendingUp, Filter, ChevronDown, Smartphone, MessageSquare, Grid, Check, Monitor as MonitorIcon, Sliders, Eye, ZapOff, Timer, Edit3 } from 'lucide-react';
 import { analyzeSafetyImage } from '../services/geminiService';
 import { SafetyAnalysis, LogEntry, Hazard } from '../types';
 
@@ -35,6 +35,9 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [currentAnalysisCameraId, setCurrentAnalysisCameraId] = useState<string | null>(null);
   
+  // Custom Camera Labels
+  const [customLabels, setCustomLabels] = useState<Record<string, string>>({});
+
   // Smart Switching State
   const [isSmartMode, setIsSmartMode] = useState(true);
   const [cameraLastCheckTime, setCameraLastCheckTime] = useState<Record<string, number>>({});
@@ -90,6 +93,31 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
 
   // Round Robin Index (Fallback)
   const cameraCycleIndex = useRef(0);
+
+  // Load Custom Labels
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('hse_camera_labels');
+      if (saved) {
+        setCustomLabels(JSON.parse(saved));
+      }
+    } catch (e) {
+      console.error("Failed to load camera labels", e);
+    }
+  }, []);
+
+  const updateLabel = (deviceId: string, name: string) => {
+    const updated = { ...customLabels, [deviceId]: name };
+    if (!name.trim()) delete updated[deviceId]; // Remove empty labels
+    setCustomLabels(updated);
+    localStorage.setItem('hse_camera_labels', JSON.stringify(updated));
+  };
+
+  const getDeviceName = useCallback((deviceId: string) => {
+    if (customLabels[deviceId]) return customLabels[deviceId];
+    const device = devices.find(d => d.deviceId === deviceId);
+    return device?.label || `Camera ${deviceId.slice(0, 5)}...`;
+  }, [customLabels, devices]);
 
   // Device Enumeration
   const handleDevices = useCallback(
@@ -303,16 +331,17 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
         const secondsSinceCheck = (now - lastCheck) / 1000;
         
         // Hazard weight: 0 (Safe) to 3 (High). 
-        const hazardWeight = (cameraHazardLevel[id] || 0) * 15;
+        // Increased multiplier from 15 to 40 to ensure cameras with hazards are checked much more frequently.
+        const hazardWeight = (cameraHazardLevel[id] || 0) * 40;
 
-        // Retention Weight: Prioritize cameras with recent critical alerts for 60 seconds
+        // Retention Weight: Prioritize cameras with recent critical alerts for 90 seconds (increased from 60)
         const lastAlert = cameraLastAlertTime[id] || 0;
         const secondsSinceAlert = (now - lastAlert) / 1000;
         let retentionWeight = 0;
         
-        if (secondsSinceAlert < 60) {
-            // Decaying weight: 60 at t=0, 0 at t=60. Multiplier ensures it overrides simple round-robin
-            retentionWeight = (60 - secondsSinceAlert) * 1.5; 
+        if (secondsSinceAlert < 90) {
+            // Decaying weight: 90 at t=0. Multiplier 2.0 ensures it overrides simple round-robin
+            retentionWeight = (90 - secondsSinceAlert) * 2.0; 
         }
 
         const priority = secondsSinceCheck + hazardWeight + retentionWeight;
@@ -372,7 +401,7 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
              isSafe: isSafe
           };
 
-          const camLabel = devices.find(d => d.deviceId === deviceId)?.label || `Camera`;
+          const camLabel = getDeviceName(deviceId);
 
           // Update State
           setCameraAnalyses(prev => ({ ...prev, [deviceId]: filteredResult }));
@@ -400,7 +429,7 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
         }
       }
     }
-  }, [isAnalyzing, isSmartMode, onNewAnalysis, checkAlerts, activeDeviceIds, devices, alertSettings.categoryThresholds, getNextSmartCamera]);
+  }, [isAnalyzing, isSmartMode, onNewAnalysis, checkAlerts, activeDeviceIds, devices, alertSettings.categoryThresholds, getNextSmartCamera, getDeviceName]);
 
   const toggleMonitoring = () => {
     if (isMonitoring) {
@@ -492,6 +521,36 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
             
             {/* Settings Content */}
             <div className="space-y-6">
+
+              {/* Camera Naming Section */}
+              <div className="bg-slate-700/30 p-4 rounded-lg border border-slate-600">
+                  <h4 className="text-slate-300 font-bold mb-3 text-xs uppercase flex items-center gap-2">
+                      <Video className="w-4 h-4" /> Camera Feeds & Labels
+                  </h4>
+                  <div className="space-y-3 max-h-40 overflow-y-auto pr-2 scrollbar-thin">
+                      {devices.length === 0 && <p className="text-xs text-slate-500">No cameras detected.</p>}
+                      {devices.map((device, idx) => (
+                          <div key={device.deviceId} className="flex items-center gap-3">
+                              <span className="text-[10px] font-mono text-slate-500 w-4">{idx + 1}</span>
+                              <div className="flex-1">
+                                  <input
+                                      type="text"
+                                      placeholder={device.label || `Camera ${idx + 1}`}
+                                      value={customLabels[device.deviceId] || ''}
+                                      onChange={(e) => updateLabel(device.deviceId, e.target.value)}
+                                      className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-xs text-white focus:border-blue-500 outline-none transition-colors"
+                                  />
+                              </div>
+                              {customLabels[device.deviceId] && (
+                                   <button onClick={() => updateLabel(device.deviceId, '')} className="text-slate-500 hover:text-red-400">
+                                      <X className="w-3 h-3" />
+                                   </button>
+                              )}
+                          </div>
+                      ))}
+                  </div>
+              </div>
+
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-2 flex justify-between">
                   <span>Minimum Safety Score</span>
@@ -581,7 +640,7 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
                // Check retention status
                const lastAlert = cameraLastAlertTime[deviceId] || 0;
                const timeSinceAlert = (Date.now() - lastAlert) / 1000;
-               const isRetentionActive = timeSinceAlert < 60;
+               const isRetentionActive = timeSinceAlert < 90;
 
                return (
                  <div key={deviceId} className="relative w-full h-full border border-slate-800 overflow-hidden group">
@@ -597,7 +656,7 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
                    <div className="absolute top-2 left-2 flex flex-col gap-1 z-20">
                       <div className="flex items-center gap-2">
                         <div className={`px-2 py-1 rounded text-[10px] font-bold text-white shadow-md backdrop-blur-md ${hasHazard ? 'bg-red-600/80' : 'bg-slate-800/60'}`}>
-                          {devices.find(d => d.deviceId === deviceId)?.label.slice(0, 15) || 'Camera'}
+                          {getDeviceName(deviceId).slice(0, 15)}
                         </div>
                         
                         {/* Active Analysis Indicator */}
@@ -690,7 +749,7 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
                >
                  <span>
                    {activeDeviceIds.length === 0 ? "No Camera Selected" : 
-                    activeDeviceIds.length === 1 ? (devices.find(d => d.deviceId === activeDeviceIds[0])?.label || "Camera 1") :
+                    activeDeviceIds.length === 1 ? (getDeviceName(activeDeviceIds[0])) :
                     `${activeDeviceIds.length} Cameras Active`}
                  </span>
                  <ChevronDown className="w-4 h-4 text-slate-400" />
@@ -713,7 +772,7 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
                              {isActive && <Check className="w-3 h-3 text-white" />}
                            </div>
                            <span className={`text-xs ${isActive ? 'text-blue-200 font-bold' : 'text-slate-300'}`}>
-                             {device.label || `Camera ${idx + 1}`}
+                             {getDeviceName(device.deviceId)}
                            </span>
                          </div>
                        )
@@ -765,7 +824,7 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
                <span className="text-xs font-mono text-slate-400 uppercase">Analysis Source</span>
                <span className="text-sm font-bold text-blue-300 flex items-center gap-2">
                  <Video className="w-4 h-4" />
-                 {devices.find(d => d.deviceId === currentAnalysisCameraId)?.label || "Active Camera"}
+                 {currentAnalysisCameraId ? getDeviceName(currentAnalysisCameraId) : "Active Camera"}
                </span>
              </div>
 
