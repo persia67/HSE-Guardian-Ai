@@ -1,3 +1,4 @@
+
 export interface Hazard {
   type: string;
   category: 'PPE' | 'MACHINERY' | 'HOUSEKEEPING' | 'FIRE' | 'BEHAVIOR' | 'OTHER';
@@ -37,6 +38,7 @@ export enum AppTab {
   MONITOR = 'monitor',
   REPORTS = 'reports',
   RESOURCES = 'resources',
+  VOICE_ASSISTANT = 'voice_assistant',
   SETTINGS = 'settings'
 }
 

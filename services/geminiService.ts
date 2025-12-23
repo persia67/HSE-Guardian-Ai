@@ -1,6 +1,7 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 import { SafetyAnalysis, LogEntry, GroundingChunk } from "../types";
+import { checkLicense } from "./licenseService";
 
 // Using a plain object for responseSchema as per updated SDK best practices
 const analysisSchema = {
@@ -46,18 +47,38 @@ const analysisSchema = {
   required: ["safetyScore", "isSafe", "summary", "hazards"],
 };
 
+// Helper to safely get API key without crashing
+const getApiKey = (): string | undefined => {
+  try {
+    if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
+      return process.env.API_KEY;
+    }
+  } catch (e) {
+    // Ignore access errors
+  }
+  return undefined;
+};
+
+// Security Guard
+const ensureAuthorized = () => {
+  if (!checkLicense()) {
+    throw new Error("UNAUTHORIZED_ACCESS: License validation failed. Please reactivate the software.");
+  }
+};
+
 export const analyzeSafetyImage = async (base64Image: string): Promise<SafetyAnalysis> => {
   try {
-    // Desktop App Compilation Check: Ensure Environment Variable is injected
-    if (!process.env.API_KEY) {
-      console.error("CRITICAL: API_KEY is missing from environment variables.");
-      throw new Error("API Key configuration missing. Check build settings.");
+    ensureAuthorized(); // Security Check
+
+    const apiKey = getApiKey();
+    if (!apiKey) {
+      throw new Error("API Key not configured");
     }
 
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const ai = new GoogleGenAI({ apiKey });
 
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview", // Updated to Gemini 3 for enhanced safety reasoning
+      model: "gemini-3-flash-preview", 
       contents: {
         parts: [
           {
@@ -87,7 +108,6 @@ export const analyzeSafetyImage = async (base64Image: string): Promise<SafetyAna
       },
     });
 
-    // Access .text property directly (not a method)
     if (response.text) {
       const data = JSON.parse(response.text);
       return {
@@ -98,11 +118,25 @@ export const analyzeSafetyImage = async (base64Image: string): Promise<SafetyAna
     throw new Error("No data returned from AI");
   } catch (error) {
     console.error("Gemini Analysis Error:", error);
+    
+    const msg = (error as Error).message;
+    if (msg.includes("UNAUTHORIZED")) {
+        return {
+            timestamp: new Date().toLocaleTimeString(),
+            safetyScore: 0,
+            isSafe: false,
+            summary: "خطای امنیتی: لایسنس نرم‌افزار نامعتبر است. دسترسی قطع شد.",
+            hazards: []
+        };
+    }
+
     return {
       timestamp: new Date().toLocaleTimeString(),
       safetyScore: 0,
       isSafe: false,
-      summary: "خطا در اتصال به هوش مصنوعی. لطفاً تنظیمات شبکه و کلید API را بررسی کنید.",
+      summary: msg === "API Key not configured" 
+        ? "کلید API تنظیم نشده است. لطفاً تنظیمات برنامه را بررسی کنید." 
+        : "خطا در ارتباط با هوش مصنوعی.",
       hazards: [],
     };
   }
@@ -110,11 +144,13 @@ export const analyzeSafetyImage = async (base64Image: string): Promise<SafetyAna
 
 export const generateSessionReport = async (logs: LogEntry[]): Promise<string> => {
   try {
-    if (!process.env.API_KEY) throw new Error("API Key missing");
-    
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    ensureAuthorized(); // Security Check
+    const apiKey = getApiKey();
+    if (!apiKey) throw new Error("API Key missing");
 
-    const textLogs = logs.map(({ thumbnail, ...rest }) => rest);
+    const ai = new GoogleGenAI({ apiKey });
+
+    const textLogs = logs.slice(0, 50).map(({ thumbnail, ...rest }) => rest);
     
     const response = await ai.models.generateContent({
       model: "gemini-3-pro-preview",
@@ -132,27 +168,30 @@ export const generateSessionReport = async (logs: LogEntry[]): Promise<string> =
           3. **Timeline Analysis**: When did most incidents occur?
           4. **Strategic Recommendations**: What long-term actions should management take based on this data?
           
-          Format the output using clear Markdown with bullet points.`
+          Format the output using clear Markdown with bullet points. Do not wrap in JSON.`
         }]
       }
     });
 
-    // Directly return .text property
     return response.text || "Could not generate report.";
   } catch (error) {
     console.error("Report Generation Error:", error);
-    return "خطا در تولید گزارش هوشمند.";
+    if ((error as Error).message.includes("UNAUTHORIZED")) return "خطای لایسنس: امکان تولید گزارش وجود ندارد.";
+    return "خطا در تولید گزارش هوشمند. کلید API یا اینترنت را بررسی کنید.";
   }
 };
 
 export const findNearbyEmergencyServices = async (lat: number, lng: number): Promise<{text: string, chunks: GroundingChunk[]}> => {
   try {
-     if (!process.env.API_KEY) throw new Error("API Key missing");
+     ensureAuthorized(); // Security Check
+     const apiKey = getApiKey();
+     if (!apiKey) throw new Error("API Key missing");
 
-     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+     const ai = new GoogleGenAI({ apiKey });
+     
      const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash", // Maps grounding requires 2.5 series
-      contents: "Find the nearest emergency medical centers (hospitals) and fire stations. Provide a brief list with estimated drive times if available. Also look for industrial safety equipment suppliers.",
+      model: "gemini-2.5-flash", 
+      contents: "Find the nearest emergency medical centers (hospitals) and fire stations relative to my location. Provide a brief list with estimated drive times if available. Also look for industrial safety equipment suppliers nearby.",
       config: {
         tools: [{googleMaps: {}}],
         toolConfig: {
@@ -172,6 +211,7 @@ export const findNearbyEmergencyServices = async (lat: number, lng: number): Pro
     };
   } catch (e) {
     console.error("Maps Grounding Error", e);
-    return { text: "Error retrieving location data or connecting to service.", chunks: [] };
+    if ((e as Error).message.includes("UNAUTHORIZED")) return { text: "دسترسی غیرمجاز.", chunks: [] };
+    return { text: "خطا در دریافت اطلاعات مکانی. کلید API را بررسی کنید.", chunks: [] };
   }
 };

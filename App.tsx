@@ -1,18 +1,27 @@
 
 import React, { useState, useEffect } from 'react';
-import { Shield, Activity, List, Video, AlertOctagon, Download, Sparkles, FileText, Loader2, PlayCircle, MapPin, ExternalLink, Navigation, Settings, Smartphone, Monitor as MonitorIcon, Key, Link as LinkIcon, RefreshCw, Zap } from 'lucide-react';
+import { Shield, Activity, List, Video, AlertOctagon, Download, Sparkles, FileText, Loader2, PlayCircle, MapPin, ExternalLink, Navigation, Settings, Smartphone, Monitor as MonitorIcon, Key, Link as LinkIcon, RefreshCw, Zap, Map, Lock, AlertTriangle, Mic } from 'lucide-react';
 import Monitor from './components/Monitor';
 import SafetyChart from './components/SafetyChart';
+import VoiceAssistant from './components/VoiceAssistant';
 import { LogEntry, AppTab, GroundingChunk, ConnectedDevice } from './types';
 import { generateSessionReport, findNearbyEmergencyServices } from './services/geminiService';
+import { activateLicense, checkLicense, deactivate, generateTestKey } from './services/licenseService';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>(AppTab.MONITOR);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [isActivated, setIsActivated] = useState(false);
   const [serialKey, setSerialKey] = useState('');
-  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
-  const [aiReport, setAiReport] = useState<string | null>(null);
+  const [activationError, setActivationError] = useState('');
+  
+  // Report State
+  const [isReportLoading, setIsReportLoading] = useState(false);
+  const [reportMarkdown, setReportMarkdown] = useState<string | null>(null);
+
+  // Resources State
+  const [isLocating, setIsLocating] = useState(false);
+  const [emergencyData, setEmergencyData] = useState<{text: string, chunks: GroundingChunk[]} | null>(null);
   
   // شبیه‌سازی دستگاه‌های همگام
   const [connectedDevices, setConnectedDevices] = useState<ConnectedDevice[]>([
@@ -26,61 +35,109 @@ export default function App() {
   };
 
   const handleActivation = () => {
-    if (serialKey.length >= 8) {
+    setActivationError('');
+    if (activateLicense(serialKey)) {
       setIsActivated(true);
-      // ذخیره در LocalStorage برای ماندگاری (شبیه‌سازی اکتیویشن)
-      localStorage.setItem('hse_serial', serialKey);
     } else {
-      alert("لطفاً شماره سریال معتبر (حداقل ۸ کاراکتر) وارد کنید.");
+      setActivationError('کد لایسنس نامعتبر است. فرمت صحیح: HSE-XXXX-YYYY');
     }
   };
 
+  const handleGenerateReport = async () => {
+    if (logs.length === 0) return;
+    setIsReportLoading(true);
+    const report = await generateSessionReport(logs);
+    setReportMarkdown(report);
+    setIsReportLoading(false);
+  };
+
+  const handleFindServices = async () => {
+    setIsLocating(true);
+    if ("geolocation" in navigator) {
+      navigator.geolocation.getCurrentPosition(async (position) => {
+        const { latitude, longitude } = position.coords;
+        const result = await findNearbyEmergencyServices(latitude, longitude);
+        setEmergencyData(result);
+        setIsLocating(false);
+      }, (err) => {
+         console.error("Geo Error", err);
+         findNearbyEmergencyServices(35.6892, 51.3890).then(res => {
+            setEmergencyData(res);
+            setIsLocating(false);
+         });
+      });
+    } else {
+        alert("Geolocaiton is not supported by this browser.");
+        setIsLocating(false);
+    }
+  };
+
+  // Check License on Mount
   useEffect(() => {
-    const savedKey = localStorage.getItem('hse_serial');
-    if (savedKey) {
-      setSerialKey(savedKey);
+    const isValid = checkLicense();
+    if (isValid) {
       setIsActivated(true);
+    } else {
+      // For Demo purposes, show a hint
+      // console.log("Demo Key:", generateTestKey());
     }
   }, []);
 
   if (!isActivated) {
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-6 rtl-text">
-        <div className="max-w-md w-full bg-slate-800 border border-slate-700 rounded-2xl p-8 shadow-2xl">
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-6 rtl-text relative overflow-hidden">
+        {/* Background Grid Animation */}
+        <div className="absolute inset-0 bg-[linear-gradient(to_right,#4f4f4f2e_1px,transparent_1px),linear-gradient(to_bottom,#4f4f4f2e_1px,transparent_1px)] bg-[size:14px_24px] pointer-events-none"></div>
+
+        <div className="max-w-md w-full bg-slate-800 border border-slate-700 rounded-2xl p-8 shadow-2xl relative z-10">
           <div className="flex flex-col items-center mb-8">
-            <div className="w-20 h-20 bg-gradient-to-br from-orange-500 to-red-600 rounded-2xl flex items-center justify-center shadow-2xl mb-4">
+            <div className="w-20 h-20 bg-gradient-to-br from-orange-500 to-red-600 rounded-2xl flex items-center justify-center shadow-2xl mb-4 relative">
               <Shield className="text-white w-12 h-12" />
+              <div className="absolute -bottom-2 -right-2 bg-slate-900 rounded-full p-1 border border-slate-700">
+                 <Lock className="w-4 h-4 text-red-500" />
+              </div>
             </div>
-            <h1 className="text-2xl font-bold text-white">فعال‌سازی سیستم HSE Guardian</h1>
+            <h1 className="text-2xl font-bold text-white">Security Check</h1>
             <p className="text-slate-400 text-center text-sm mt-2 leading-relaxed">
-              جهت اشتراک‌گذاری داده‌ها بین نسخه دسکتاپ و اندروید، شماره سریال واحد ایمنی خود را وارد کنید.
+              سیستم امنیتی HSE Guardian فعال است. جهت دسترسی به کنسول، لایسنس سازمانی خود را وارد کنید.
             </p>
           </div>
           
           <div className="space-y-4">
             <div>
-              <label className="block text-xs font-bold text-slate-500 uppercase mb-2 mr-1">شماره سریال واحد</label>
-              <div className="relative">
-                <Key className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-2 mr-1">کلید لایسنس (License Key)</label>
+              <div className="relative group">
+                <Key className={`absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 transition-colors ${activationError ? 'text-red-500' : 'text-slate-500 group-focus-within:text-orange-500'}`} />
                 <input 
                   type="text" 
                   value={serialKey}
                   onChange={(e) => setSerialKey(e.target.value)}
-                  placeholder="مثلاً: HSE-9988-XXXX"
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl py-3 pl-10 pr-4 text-white focus:border-orange-500 outline-none transition-all text-center tracking-widest font-mono"
+                  placeholder="HSE-XXXX-YYYY"
+                  className={`w-full bg-slate-900 border rounded-xl py-3 pl-10 pr-4 text-white outline-none transition-all text-center tracking-widest font-mono ${activationError ? 'border-red-500 focus:border-red-500' : 'border-slate-700 focus:border-orange-500'}`}
                 />
               </div>
+              {activationError && (
+                 <div className="flex items-center gap-1mt-2 text-xs text-red-400 mt-2 animate-pulse">
+                    <AlertTriangle className="w-3 h-3" /> {activationError}
+                 </div>
+              )}
             </div>
+            
             <button 
               onClick={handleActivation}
               className="w-full py-4 bg-orange-600 hover:bg-orange-500 text-white font-bold rounded-xl shadow-lg shadow-orange-900/40 transition-all flex items-center justify-center gap-2"
             >
-              <Zap className="w-5 h-5" /> تایید و اتصال به شبکه
+              <Zap className="w-5 h-5" /> اعتبارسنجی و ورود
             </button>
+
+            {/* Hint for Demo User */}
+            <div className="mt-4 p-3 bg-slate-700/30 rounded border border-slate-700 text-[10px] text-slate-400 text-center font-mono">
+               Example Valid Key (For Testing): <span className="text-emerald-400 select-all">{generateTestKey()}</span>
+            </div>
           </div>
           <div className="mt-6 pt-6 border-t border-slate-700 text-center">
-            <p className="text-xs text-slate-500 leading-relaxed">
-              داده‌های شما به صورت سرتاسری رمزنگاری شده و بین تمام دستگاه‌های فعال با این سریال همگام می‌شوند.
+            <p className="text-[10px] text-slate-500 leading-relaxed uppercase tracking-widest">
+              Secured by HSE-Crypto-V1 <br/> Unauthorized access is prohibited
             </p>
           </div>
         </div>
@@ -100,7 +157,7 @@ export default function App() {
             <h1 className="text-lg font-bold tracking-tight text-slate-100">HSE Guardian AI</h1>
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
-              <p className="text-[10px] uppercase tracking-widest text-emerald-400 font-bold">شبکه واحد ایمنی متصل است</p>
+              <p className="text-[10px] uppercase tracking-widest text-emerald-400 font-bold">شبکه امنیتی فعال</p>
             </div>
           </div>
         </div>
@@ -109,7 +166,9 @@ export default function App() {
           {[
             { id: AppTab.MONITOR, icon: Video, label: 'مانیتورینگ' },
             { id: AppTab.DASHBOARD, icon: Activity, label: 'داشبورد' },
+            { id: AppTab.VOICE_ASSISTANT, icon: Mic, label: 'دستیار صوتی' },
             { id: AppTab.REPORTS, icon: List, label: 'گزارشات' },
+            { id: AppTab.RESOURCES, icon: Map, label: 'منابع' },
             { id: AppTab.SETTINGS, icon: Settings, label: 'تنظیمات' },
           ].map((tab) => (
             <button
@@ -134,6 +193,10 @@ export default function App() {
         
         {activeTab === AppTab.MONITOR && (
           <Monitor onNewAnalysis={handleNewAnalysis} />
+        )}
+        
+        {activeTab === AppTab.VOICE_ASSISTANT && (
+          <VoiceAssistant />
         )}
 
         {activeTab === AppTab.DASHBOARD && (
@@ -218,6 +281,14 @@ export default function App() {
                
                <div className="flex gap-2 w-full sm:w-auto">
                  <button 
+                    onClick={handleGenerateReport}
+                    disabled={isReportLoading || logs.length === 0}
+                    className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-all font-medium shadow-lg shadow-indigo-900/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                 >
+                   {isReportLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                   تحلیل هوشمند (Gemini)
+                 </button>
+                 <button 
                    onClick={() => setLogs([])}
                    className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg transition-colors font-medium shadow-md border border-slate-600"
                  >
@@ -230,6 +301,20 @@ export default function App() {
                  </button>
                </div>
              </div>
+
+             {reportMarkdown && (
+                <div className="mb-8 bg-slate-800 border-l-4 border-indigo-500 p-6 rounded-r-xl shadow-2xl relative animate-fadeIn">
+                   <h3 className="text-indigo-400 font-bold mb-4 flex items-center gap-2">
+                      <Sparkles className="w-5 h-5" /> گزارش تحلیلی هوش مصنوعی
+                   </h3>
+                   <div className="prose prose-invert prose-sm max-w-none text-slate-200 leading-loose whitespace-pre-wrap">
+                      {reportMarkdown}
+                   </div>
+                   <button onClick={() => setReportMarkdown(null)} className="absolute top-4 left-4 text-slate-500 hover:text-white">
+                      بستن
+                   </button>
+                </div>
+             )}
 
              <div className="space-y-4">
                 {logs.length === 0 ? (
@@ -282,6 +367,64 @@ export default function App() {
           </div>
         )}
 
+        {activeTab === AppTab.RESOURCES && (
+          <div className="h-full flex flex-col items-center justify-start max-w-3xl mx-auto pt-10 px-4">
+             <div className="bg-slate-800 p-8 rounded-2xl shadow-2xl border border-slate-700 w-full text-center">
+                <div className="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg shadow-blue-900/50">
+                   <Map className="text-white w-8 h-8" />
+                </div>
+                <h2 className="text-2xl font-bold text-white mb-2">خدمات اضطراری نزدیک</h2>
+                <p className="text-slate-400 mb-8">یافتن سریع بیمارستان‌ها، ایستگاه‌های آتش‌نشانی و تجهیزات ایمنی در اطراف شما با استفاده از هوش مصنوعی گوگل.</p>
+                
+                <button 
+                  onClick={handleFindServices}
+                  disabled={isLocating}
+                  className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-8 rounded-xl shadow-xl transition-all flex items-center justify-center gap-2 mx-auto disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isLocating ? <Loader2 className="w-5 h-5 animate-spin" /> : <Navigation className="w-5 h-5" />}
+                  {isLocating ? "در حال مکان‌یابی..." : "مکان‌یابی و جستجو"}
+                </button>
+             </div>
+
+             {emergencyData && (
+                <div className="mt-8 w-full bg-slate-800 rounded-xl border border-slate-700 p-6 shadow-xl animate-fadeIn">
+                   <div className="prose prose-invert prose-sm max-w-none mb-6 text-right" dir="auto">
+                      <div className="whitespace-pre-wrap leading-loose text-slate-300">
+                         {emergencyData.text}
+                      </div>
+                   </div>
+                   
+                   {emergencyData.chunks && emergencyData.chunks.length > 0 && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 border-t border-slate-700 pt-4">
+                         {emergencyData.chunks.map((chunk, i) => {
+                            if (!chunk.maps?.uri) return null;
+                            return (
+                               <a 
+                                 key={i} 
+                                 href={chunk.maps.uri} 
+                                 target="_blank" 
+                                 rel="noopener noreferrer"
+                                 className="flex items-center gap-3 p-3 bg-slate-700/50 hover:bg-slate-700 rounded-lg transition-colors group"
+                               >
+                                  <div className="bg-blue-900/30 p-2 rounded text-blue-400 group-hover:text-blue-300">
+                                     <MapPin className="w-5 h-5" />
+                                  </div>
+                                  <div className="flex-1 overflow-hidden">
+                                     <div className="truncate font-bold text-slate-200">{chunk.maps.title || "مکان روی نقشه"}</div>
+                                     <div className="text-xs text-blue-400 flex items-center gap-1">
+                                        مشاهده در Google Maps <ExternalLink className="w-3 h-3" />
+                                     </div>
+                                  </div>
+                               </a>
+                            )
+                         })}
+                      </div>
+                   )}
+                </div>
+             )}
+          </div>
+        )}
+
         {activeTab === AppTab.SETTINGS && (
           <div className="h-full overflow-y-auto pr-2 scrollbar-thin max-w-2xl mx-auto">
             <div className="bg-slate-800 rounded-2xl border border-slate-700 p-8 shadow-2xl">
@@ -294,14 +437,17 @@ export default function App() {
                   <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-4 border-b border-slate-700 pb-2">وضعیت فعال‌سازی</h3>
                   <div className="bg-slate-900/50 p-4 rounded-xl border border-emerald-500/20 flex items-center justify-between">
                     <div>
-                      <div className="text-sm font-bold text-white">سریال واحد: {serialKey}</div>
-                      <div className="text-[10px] text-emerald-500 mt-1">فعال و در حال همگام‌سازی...</div>
+                      <div className="text-sm font-bold text-white flex items-center gap-2">
+                        <Shield className="w-4 h-4 text-emerald-500" />
+                        مجوز امنیتی فعال است
+                      </div>
+                      <div className="text-[10px] text-slate-500 mt-1 font-mono">License Hash: {btoa(serialKey).slice(0, 10)}...</div>
                     </div>
                     <button 
-                      onClick={() => { localStorage.removeItem('hse_serial'); setIsActivated(false); }}
-                      className="text-xs text-red-400 hover:text-red-300 transition-colors"
+                      onClick={() => { deactivate(); setIsActivated(false); }}
+                      className="text-xs text-red-400 hover:text-red-300 transition-colors border border-red-900/50 px-3 py-1.5 rounded-lg hover:bg-red-900/20"
                     >
-                      خروج از حساب
+                      غیرفعال‌سازی و خروج
                     </button>
                   </div>
                 </section>
