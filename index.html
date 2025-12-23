@@ -20,6 +20,14 @@
     ">
     <title>HSE Guardian AI</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      // Global Polyfill for process.env to prevent "process is not defined" crashes in browser environments
+      window.process = {
+        env: {
+          NODE_ENV: 'development'
+        }
+      };
+    </script>
     <style>
       /* Custom scrollbar for log area */
       .scrollbar-thin::-webkit-scrollbar {
@@ -50,12 +58,14 @@
 {
   "imports": {
     "react": "https://esm.sh/react@18.3.1",
-    "react-dom/": "https://esm.sh/react-dom@18.3.1/",
-    "react/": "https://esm.sh/react@18.3.1/",
+    "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+    "react-dom": "https://esm.sh/react-dom@18.3.1",
     "@google/genai": "https://esm.sh/@google/genai",
     "recharts": "https://esm.sh/recharts@2.12.7",
     "lucide-react": "https://esm.sh/lucide-react@0.378.0",
-    "react-webcam": "https://esm.sh/react-webcam@7.2.0"
+    "react-webcam": "https://esm.sh/react-webcam@7.2.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react/": "https://esm.sh/react@^19.2.3/"
   }
 }
 </script>

@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { Mic, MicOff, Activity, Volume2, XCircle, Play, Loader2 } from 'lucide-react';
 import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
@@ -50,7 +49,7 @@ export default function VoiceAssistant() {
     const sessionPromiseRef = useRef<Promise<any> | null>(null);
 
     // Visualizer Loop
-    const animationFrameRef = useRef<number>();
+    const animationFrameRef = useRef<number | null>(null);
 
     const cleanup = () => {
         if (processorRef.current) {
@@ -71,6 +70,7 @@ export default function VoiceAssistant() {
         }
         if (animationFrameRef.current) {
             cancelAnimationFrame(animationFrameRef.current);
+            animationFrameRef.current = null;
         }
         setIsConnected(false);
         setIsConnecting(false);

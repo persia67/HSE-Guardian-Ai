@@ -1,7 +1,7 @@
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import Webcam from 'react-webcam';
-import { Camera, AlertTriangle, CheckCircle, Pause, Play, Settings, Bell, X, Video, BrainCircuit, TrendingUp, ChevronDown, Smartphone, MessageSquare, Grid, Check, Monitor as MonitorIcon, Sliders, Eye, ZapOff, Timer } from 'lucide-react';
+import { Camera, AlertTriangle, CheckCircle, Pause, Play, Settings, Bell, X, Video, BrainCircuit, TrendingUp, ChevronDown, Smartphone, MessageSquare, Grid, Check, Monitor as MonitorIcon, Eye, RefreshCw, Clock } from 'lucide-react';
 import { analyzeSafetyImage } from '../services/geminiService';
 import { SafetyAnalysis, LogEntry, Hazard } from '../types';
 
@@ -563,7 +563,7 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
               {/* Confidence Thresholds */}
               <div className="bg-slate-700/30 p-4 rounded-lg border border-slate-600">
                 <h4 className="text-slate-300 font-bold mb-3 text-xs uppercase flex items-center gap-2">
-                  <Sliders className="w-4 h-4" /> Hazard Confidence Thresholds
+                  <Settings className="w-4 h-4" /> Hazard Confidence Thresholds
                 </h4>
                 <p className="text-xs text-slate-400 mb-4">Set the minimum confidence required to trigger an alert for each category.</p>
                 <div className="grid grid-cols-1 gap-4">
@@ -672,7 +672,7 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
                       {/* Retention Badge */}
                       {isRetentionActive && isSmartMode && (
                          <div className="flex items-center gap-1 bg-orange-600/90 text-white text-[10px] px-2 py-1 rounded shadow-lg backdrop-blur-sm animate-pulse w-fit">
-                            <Timer className="w-3 h-3" />
+                            <Clock className="w-3 h-3" />
                             RETENTION
                          </div>
                       )}
@@ -790,7 +790,7 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
                    isSmartMode ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'bg-slate-700 text-slate-400 hover:text-white'
                  }`}
                >
-                 {isSmartMode ? <BrainCircuit className="w-4 h-4" /> : <ZapOff className="w-4 h-4" />}
+                 {isSmartMode ? <BrainCircuit className="w-4 h-4" /> : <RefreshCw className="w-4 h-4" />}
                  <span className="hidden sm:inline">{isSmartMode ? "Smart Mode" : "Cycle Mode"}</span>
                </button>
             )}
