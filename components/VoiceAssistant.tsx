@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Mic, MicOff, Activity, Volume2, XCircle, Play, Loader2, Waveform } from 'lucide-react';
+import { Mic, MicOff, Activity, Volume2, XCircle, Play, Loader2 } from 'lucide-react';
 import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
 import { checkLicense } from '../services/licenseService';
 

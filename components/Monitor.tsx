@@ -1,6 +1,7 @@
+
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import Webcam from 'react-webcam';
-import { Camera, AlertTriangle, CheckCircle, Pause, Play, CameraOff, Settings, Volume2, VolumeX, Bell, BellOff, X, Zap, List, Disc, Video, BrainCircuit, TrendingUp, Filter, ChevronDown, Smartphone, MessageSquare, Grid, Check, Monitor as MonitorIcon, Sliders, Eye, ZapOff, Timer, Edit3 } from 'lucide-react';
+import { Camera, AlertTriangle, CheckCircle, Pause, Play, Settings, Bell, X, Video, BrainCircuit, TrendingUp, ChevronDown, Smartphone, MessageSquare, Grid, Check, Monitor as MonitorIcon, Sliders, Eye, ZapOff, Timer } from 'lucide-react';
 import { analyzeSafetyImage } from '../services/geminiService';
 import { SafetyAnalysis, LogEntry, Hazard } from '../types';
 

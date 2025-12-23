@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { Shield, Activity, List, Video, AlertOctagon, Download, Sparkles, FileText, Loader2, PlayCircle, MapPin, ExternalLink, Navigation, Settings, Smartphone, Monitor as MonitorIcon, Key, Link as LinkIcon, RefreshCw, Zap, Map, Lock, AlertTriangle, Mic } from 'lucide-react';
+import { Shield, Activity, List, Video, AlertOctagon, Download, Sparkles, FileText, Loader2, PlayCircle, MapPin, ExternalLink, Navigation, Settings, Smartphone, Monitor as MonitorIcon, Key, Link as LinkIcon, RefreshCw, Zap, Map as MapIcon, Lock, AlertTriangle, Mic } from 'lucide-react';
 import Monitor from './components/Monitor';
 import SafetyChart from './components/SafetyChart';
 import VoiceAssistant from './components/VoiceAssistant';
@@ -168,7 +168,7 @@ export default function App() {
             { id: AppTab.DASHBOARD, icon: Activity, label: 'داشبورد' },
             { id: AppTab.VOICE_ASSISTANT, icon: Mic, label: 'دستیار صوتی' },
             { id: AppTab.REPORTS, icon: List, label: 'گزارشات' },
-            { id: AppTab.RESOURCES, icon: Map, label: 'منابع' },
+            { id: AppTab.RESOURCES, icon: MapIcon, label: 'منابع' },
             { id: AppTab.SETTINGS, icon: Settings, label: 'تنظیمات' },
           ].map((tab) => (
             <button
@@ -371,7 +371,7 @@ export default function App() {
           <div className="h-full flex flex-col items-center justify-start max-w-3xl mx-auto pt-10 px-4">
              <div className="bg-slate-800 p-8 rounded-2xl shadow-2xl border border-slate-700 w-full text-center">
                 <div className="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg shadow-blue-900/50">
-                   <Map className="text-white w-8 h-8" />
+                   <MapIcon className="text-white w-8 h-8" />
                 </div>
                 <h2 className="text-2xl font-bold text-white mb-2">خدمات اضطراری نزدیک</h2>
                 <p className="text-slate-400 mb-8">یافتن سریع بیمارستان‌ها، ایستگاه‌های آتش‌نشانی و تجهیزات ایمنی در اطراف شما با استفاده از هوش مصنوعی گوگل.</p>

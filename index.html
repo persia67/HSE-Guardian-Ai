@@ -4,13 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <!-- Security Hardening: 
-         1. Removed wildcard '*' from default-src
-         2. Restricted connect-src to specific Google domains
-         3. Added object-src 'none' to prevent plugin execution
+         1. Added wss: to connect-src for Gemini Live API WebSockets
+         2. Maintained esm.sh and googleapis trust
     -->
     <meta http-equiv="Content-Security-Policy" content="
       default-src 'self';
-      connect-src 'self' https://generativelanguage.googleapis.com https://esm.sh;
+      connect-src 'self' https://generativelanguage.googleapis.com wss://generativelanguage.googleapis.com https://esm.sh;
       script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://esm.sh;
       style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
       font-src 'self' https://fonts.gstatic.com;
