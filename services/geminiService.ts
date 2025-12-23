@@ -48,6 +48,12 @@ const analysisSchema = {
 
 export const analyzeSafetyImage = async (base64Image: string): Promise<SafetyAnalysis> => {
   try {
+    // Desktop App Compilation Check: Ensure Environment Variable is injected
+    if (!process.env.API_KEY) {
+      console.error("CRITICAL: API_KEY is missing from environment variables.");
+      throw new Error("API Key configuration missing. Check build settings.");
+    }
+
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
     const response = await ai.models.generateContent({
@@ -96,7 +102,7 @@ export const analyzeSafetyImage = async (base64Image: string): Promise<SafetyAna
       timestamp: new Date().toLocaleTimeString(),
       safetyScore: 0,
       isSafe: false,
-      summary: "Error connecting to AI Safety Officer. Please check connection and API Key configuration.",
+      summary: "خطا در اتصال به هوش مصنوعی. لطفاً تنظیمات شبکه و کلید API را بررسی کنید.",
       hazards: [],
     };
   }
@@ -104,6 +110,8 @@ export const analyzeSafetyImage = async (base64Image: string): Promise<SafetyAna
 
 export const generateSessionReport = async (logs: LogEntry[]): Promise<string> => {
   try {
+    if (!process.env.API_KEY) throw new Error("API Key missing");
+    
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
     const textLogs = logs.map(({ thumbnail, ...rest }) => rest);
@@ -133,12 +141,14 @@ export const generateSessionReport = async (logs: LogEntry[]): Promise<string> =
     return response.text || "Could not generate report.";
   } catch (error) {
     console.error("Report Generation Error:", error);
-    return "Error generating AI report. Please try again.";
+    return "خطا در تولید گزارش هوشمند.";
   }
 };
 
 export const findNearbyEmergencyServices = async (lat: number, lng: number): Promise<{text: string, chunks: GroundingChunk[]}> => {
   try {
+     if (!process.env.API_KEY) throw new Error("API Key missing");
+
      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
      const response = await ai.models.generateContent({
       model: "gemini-2.5-flash", // Maps grounding requires 2.5 series

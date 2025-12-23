@@ -2,7 +2,16 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta http-equiv="Content-Security-Policy" content="
+      default-src 'self';
+      connect-src 'self' https://generativelanguage.googleapis.com https://esm.sh;
+      script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://esm.sh;
+      style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+      font-src 'self' https://fonts.gstatic.com;
+      img-src 'self' data: blob: https://esm.sh;
+      media-src 'self' data: blob:;
+    ">
     <title>HSE Guardian AI</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -24,6 +33,7 @@
       
       body {
         font-family: 'Inter', sans-serif;
+        user-select: none; /* Desktop app feel */
       }
       .rtl-text {
         font-family: 'Vazirmatn', sans-serif;
