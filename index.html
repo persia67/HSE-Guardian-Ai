@@ -1,58 +1,79 @@
+
 <!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <!-- Security Hardening: 
-         1. Added wss: to connect-src for Gemini Live API WebSockets
-         2. Maintained esm.sh and googleapis trust
+    <!-- 
+      Desktop/Electron Compatibility:
+      1. 'unsafe-inline' is needed for React in some build environments.
+      2. 'blob:' and 'data:' are essential for local Webcam streams and Base64 images.
     -->
     <meta http-equiv="Content-Security-Policy" content="
-      default-src 'self';
-      connect-src 'self' https://generativelanguage.googleapis.com wss://generativelanguage.googleapis.com https://esm.sh;
+      default-src 'self' file: filesystem:;
+      connect-src 'self' https://generativelanguage.googleapis.com wss://generativelanguage.googleapis.com https://esm.sh data: blob: file:;
       script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://esm.sh;
       style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
       font-src 'self' https://fonts.gstatic.com;
-      img-src 'self' data: blob: https://esm.sh;
-      media-src 'self' data: blob:;
+      img-src 'self' data: blob: https://esm.sh file:;
+      media-src 'self' data: blob: file:;
       object-src 'none';
       base-uri 'self';
     ">
     <title>HSE Guardian AI</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
-      // Global Polyfill for process.env to prevent "process is not defined" crashes in browser environments
-      window.process = {
-        env: {
-          NODE_ENV: 'development'
-        }
-      };
+      // Desktop Bridge Polyfill for Electron/Node environments
+      if (typeof window !== 'undefined' && typeof window.process === 'undefined') {
+        window.process = { env: { NODE_ENV: 'production' } };
+      }
     </script>
     <style>
-      /* Custom scrollbar for log area */
-      .scrollbar-thin::-webkit-scrollbar {
-        width: 6px;
-      }
-      .scrollbar-thin::-webkit-scrollbar-track {
-        background: #1f2937;
-      }
-      .scrollbar-thin::-webkit-scrollbar-thumb {
-        background: #4b5563;
-        border-radius: 3px;
-      }
-      .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-        background: #6b7280;
-      }
+      /* Desktop App Specific Styles */
+      .scrollbar-thin::-webkit-scrollbar { width: 6px; }
+      .scrollbar-thin::-webkit-scrollbar-track { background: #1f2937; }
+      .scrollbar-thin::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 3px; }
+      .scrollbar-thin::-webkit-scrollbar-thumb:hover { background: #6b7280; }
       @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;700&family=Inter:wght@400;600;700&display=swap');
       
       body {
         font-family: 'Inter', sans-serif;
         user-select: none;
+        -webkit-user-select: none;
+        overflow: hidden;
+        cursor: default;
+        background-color: #0f172a; /* Match slate-900 to avoid flash */
+        color: #f1f5f9;
       }
       .rtl-text {
         font-family: 'Vazirmatn', sans-serif;
         direction: rtl;
       }
+      
+      /* Loading Spinner Logic */
+      #app-loader {
+        position: fixed;
+        top: 0; left: 0; width: 100%; height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background: #0f172a;
+        z-index: 9999;
+        transition: opacity 0.5s ease-out;
+      }
+      .loader-spin {
+        width: 50px;
+        height: 50px;
+        border: 4px solid #334155;
+        border-top: 4px solid #f97316; /* Orange-500 */
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+      }
+      @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+      
+      @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+      .animate-fadeIn { animation: fadeIn 0.3s ease-in-out; }
     </style>
   <script type="importmap">
 {
@@ -64,13 +85,21 @@
     "recharts": "https://esm.sh/recharts@2.12.7",
     "lucide-react": "https://esm.sh/lucide-react@0.378.0",
     "react-webcam": "https://esm.sh/react-webcam@7.2.0",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "react/": "https://esm.sh/react@^19.2.3/"
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/"
   }
 }
 </script>
 </head>
-  <body class="bg-slate-900 text-slate-100 overflow-hidden">
-    <div id="root"></div>
+  <body class="bg-slate-900 text-slate-100">
+    <div id="root">
+      <!-- Fallback Loading Screen (Displays until React mounts) -->
+      <div id="app-loader">
+        <div class="loader-spin"></div>
+        <h2 style="margin-top: 20px; font-weight: bold; color: #94a3b8;">HSE Guardian AI</h2>
+        <p style="font-size: 12px; color: #64748b; margin-top: 5px;">Initializing System...</p>
+      </div>
+    </div>
+    <script type="module" src="./index.tsx"></script>
   </body>
 </html>

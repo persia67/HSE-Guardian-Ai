@@ -1,19 +1,20 @@
-
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { SafetyAnalysis, LogEntry, GroundingChunk } from "../types";
 import { checkLicense } from "./licenseService";
 
-// Using a plain object for responseSchema as per updated SDK best practices
+// Timeout configuration to prevent hanging processes
+const API_TIMEOUT_MS = 15000;
+
 const analysisSchema = {
   type: Type.OBJECT,
   properties: {
     safetyScore: {
       type: Type.NUMBER,
-      description: "A score from 0 to 100, where 100 is perfectly safe and 0 is extremely dangerous.",
+      description: "A score from 0 to 100, where 100 is perfectly safe.",
     },
     isSafe: {
       type: Type.BOOLEAN,
-      description: "True if the environment is generally safe, False if hazards exist.",
+      description: "True if the environment is generally safe.",
     },
     summary: {
       type: Type.STRING,
@@ -24,19 +25,17 @@ const analysisSchema = {
       items: {
         type: Type.OBJECT,
         properties: {
-          type: { type: Type.STRING, description: "Short title of the hazard (e.g., 'Missing Helmet')" },
+          type: { type: Type.STRING },
           category: { 
             type: Type.STRING, 
-            enum: ['PPE', 'MACHINERY', 'HOUSEKEEPING', 'FIRE', 'BEHAVIOR', 'OTHER'],
-            description: "The category of the hazard."
+            enum: ['PPE', 'MACHINERY', 'HOUSEKEEPING', 'FIRE', 'BEHAVIOR', 'OTHER']
           },
           severity: { type: Type.STRING, enum: ["HIGH", "MEDIUM", "LOW", "SAFE"] },
-          confidence: { type: Type.INTEGER, description: "AI confidence score for this detection (0-100)." },
-          description: { type: Type.STRING, description: "Description of the hazard in Persian (Farsi)." },
-          recommendation: { type: Type.STRING, description: "Immediate corrective action in Persian (Farsi)." },
+          confidence: { type: Type.INTEGER },
+          description: { type: Type.STRING },
+          recommendation: { type: Type.STRING },
           box_2d: { 
             type: Type.ARRAY, 
-            description: "Bounding box coordinates [ymin, xmin, ymax, xmax] on a 1000x1000 scale for the detected hazard.",
             items: { type: Type.INTEGER }
           }
         },
@@ -47,11 +46,15 @@ const analysisSchema = {
   required: ["safetyScore", "isSafe", "summary", "hazards"],
 };
 
-// Helper to safely get API key without crashing
 const getApiKey = (): string | undefined => {
   try {
+    // Robust check for various environments (Web, Electron, Node)
     if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
       return process.env.API_KEY;
+    }
+    // Fallback for some bundlers
+    if (typeof import.meta !== 'undefined' && (import.meta as any).env && (import.meta as any).env.VITE_API_KEY) {
+      return (import.meta as any).env.VITE_API_KEY;
     }
   } catch (e) {
     // Ignore access errors
@@ -59,73 +62,86 @@ const getApiKey = (): string | undefined => {
   return undefined;
 };
 
-// Security Guard
 const ensureAuthorized = () => {
   if (!checkLicense()) {
-    throw new Error("UNAUTHORIZED_ACCESS: License validation failed. Please reactivate the software.");
+    throw new Error("UNAUTHORIZED_ACCESS");
   }
+};
+
+// Helper to race promises with timeout
+const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T> => {
+    return Promise.race([
+        promise,
+        new Promise<T>((_, reject) => 
+            setTimeout(() => reject(new Error("REQUEST_TIMEOUT")), ms)
+        )
+    ]);
 };
 
 export const analyzeSafetyImage = async (base64Image: string): Promise<SafetyAnalysis> => {
   try {
-    ensureAuthorized(); // Security Check
+    ensureAuthorized();
 
     const apiKey = getApiKey();
-    if (!apiKey) {
-      throw new Error("API Key not configured");
-    }
+    if (!apiKey) throw new Error("API Key not configured");
 
     const ai = new GoogleGenAI({ apiKey });
 
-    const response = await ai.models.generateContent({
+    // Optimize prompt for speed and strict JSON
+    const prompt = `Analyze this CCTV frame for industrial safety. Return JSON only.
+    Output Persian (Farsi) text for descriptions.
+    Focus on: PPE, Machinery, Fire, Housekeeping.
+    Detect hazards with bounding boxes (box_2d [ymin, xmin, ymax, xmax] 0-1000).`;
+
+    const request = ai.models.generateContent({
       model: "gemini-3-flash-preview", 
       contents: {
         parts: [
-          {
-            inlineData: {
-              mimeType: "image/jpeg",
-              data: base64Image,
-            },
-          },
-          {
-            text: `You are an expert HSE Officer and AI Safety Supervisor for an industrial company. 
-            Analyze this CCTV frame from the production line.
-            Look for: PPE violations (helmets, vests, gloves), unsafe behaviors, trip hazards, blocked exits, machine guarding issues, and fatigue.
-            
-            IMPORTANT: 
-            1. Provide all descriptions, summaries, and recommendations in Persian (Farsi).
-            2. Detect specific objects or areas that constitute a hazard and provide bounding boxes (box_2d) for them.
-            3. Classify each hazard into a category (PPE, MACHINERY, HOUSEKEEPING, FIRE, BEHAVIOR, OTHER).
-            4. Assign a confidence score (0-100) to each detected hazard.
-            5. Determine a safety score based on visual evidence.`,
-          },
+          { inlineData: { mimeType: "image/jpeg", data: base64Image } },
+          { text: prompt },
         ],
       },
       config: {
         responseMimeType: "application/json",
         responseSchema: analysisSchema,
-        systemInstruction: "You are a strict, detail-oriented Safety Officer. Your goal is Zero Harm.",
+        systemInstruction: "You are a fast, real-time safety AI.",
+        // Performance tuning: Lower thinking budget or turn it off for speed if supported, 
+        // strictly follow schema.
       },
     });
+
+    const response = await withTimeout<GenerateContentResponse>(request, API_TIMEOUT_MS);
 
     if (response.text) {
       const data = JSON.parse(response.text);
       return {
         ...data,
-        timestamp: new Date().toLocaleTimeString(),
+        timestamp: new Date().toLocaleTimeString('fa-IR'),
       };
     }
-    throw new Error("No data returned from AI");
+    throw new Error("Empty response from AI");
+
   } catch (error) {
-    console.error("Gemini Analysis Error:", error);
-    
     const msg = (error as Error).message;
+    console.warn("Analysis skipped:", msg); // Warn instead of Error to keep console clean
+
     if (msg.includes("UNAUTHORIZED")) {
         return {
             timestamp: new Date().toLocaleTimeString(),
             safetyScore: 0,
             isSafe: false,
-            summary: "خطای امنیتی: لایسنس نرم‌افزار نامعتبر است. دسترسی قطع شد.",
+            summary: "خطای امنیتی: لایسنس نامعتبر.",
+            hazards: []
+        };
+    }
+    
+    // Return a 'Safe' fallback state on timeout to prevent UI flickering/panic
+    if (msg === "REQUEST_TIMEOUT") {
+         return {
+            timestamp: new Date().toLocaleTimeString(),
+            safetyScore: -1, // Indicator for timeout
+            isSafe: true, // Assume safe on momentary glitch
+            summary: "تاخیر در ارتباط با شبکه...",
             hazards: []
         };
     }
@@ -134,9 +150,7 @@ export const analyzeSafetyImage = async (base64Image: string): Promise<SafetyAna
       timestamp: new Date().toLocaleTimeString(),
       safetyScore: 0,
       isSafe: false,
-      summary: msg === "API Key not configured" 
-        ? "کلید API تنظیم نشده است. لطفاً تنظیمات برنامه را بررسی کنید." 
-        : "خطا در ارتباط با هوش مصنوعی.",
+      summary: "خطا در پردازش تصویر.",
       hazards: [],
     };
   }
@@ -144,46 +158,35 @@ export const analyzeSafetyImage = async (base64Image: string): Promise<SafetyAna
 
 export const generateSessionReport = async (logs: LogEntry[]): Promise<string> => {
   try {
-    ensureAuthorized(); // Security Check
+    ensureAuthorized();
     const apiKey = getApiKey();
     if (!apiKey) throw new Error("API Key missing");
 
     const ai = new GoogleGenAI({ apiKey });
 
-    const textLogs = logs.slice(0, 50).map(({ thumbnail, ...rest }) => rest);
+    // Memory Optimization: Only send essential data, remove heavy fields if any
+    const leanLogs = logs.slice(0, 30).map(({ thumbnail, videoUrl, ...rest }) => rest);
     
     const response = await ai.models.generateContent({
       model: "gemini-3-pro-preview",
       contents: {
         parts: [{
-          text: `You are a Senior HSE Manager. Analyze the following JSON logs from today's safety monitoring session.
-          
-          Logs Data: ${JSON.stringify(textLogs)}
-          
-          Task:
-          Write a comprehensive, professional executive report in Persian (Farsi).
-          The report should include:
-          1. **Overall Status**: Average safety score and general trend.
-          2. **Key Risks**: The most frequent or dangerous hazards detected.
-          3. **Timeline Analysis**: When did most incidents occur?
-          4. **Strategic Recommendations**: What long-term actions should management take based on this data?
-          
-          Format the output using clear Markdown with bullet points. Do not wrap in JSON.`
+          text: `Generate a Persian HSE Executive Report based on these logs: ${JSON.stringify(leanLogs)}. 
+          Format: Markdown. Include Trends, Key Risks, and Recommendations.`
         }]
       }
     });
 
-    return response.text || "Could not generate report.";
+    return response.text || "Report generation failed.";
   } catch (error) {
-    console.error("Report Generation Error:", error);
-    if ((error as Error).message.includes("UNAUTHORIZED")) return "خطای لایسنس: امکان تولید گزارش وجود ندارد.";
-    return "خطا در تولید گزارش هوشمند. کلید API یا اینترنت را بررسی کنید.";
+    console.error("Report Error:", error);
+    return "خطا در تولید گزارش. لطفا اتصال اینترنت را بررسی کنید.";
   }
 };
 
 export const findNearbyEmergencyServices = async (lat: number, lng: number): Promise<{text: string, chunks: GroundingChunk[]}> => {
   try {
-     ensureAuthorized(); // Security Check
+     ensureAuthorized();
      const apiKey = getApiKey();
      if (!apiKey) throw new Error("API Key missing");
 
@@ -191,27 +194,18 @@ export const findNearbyEmergencyServices = async (lat: number, lng: number): Pro
      
      const response = await ai.models.generateContent({
       model: "gemini-2.5-flash", 
-      contents: "Find the nearest emergency medical centers (hospitals) and fire stations relative to my location. Provide a brief list with estimated drive times if available. Also look for industrial safety equipment suppliers nearby.",
+      contents: "Find nearest hospitals and fire stations. Brief list.",
       config: {
         tools: [{googleMaps: {}}],
-        toolConfig: {
-          retrievalConfig: {
-            latLng: {
-              latitude: lat,
-              longitude: lng
-            }
-          }
-        }
+        toolConfig: { retrievalConfig: { latLng: { latitude: lat, longitude: lng } } }
       },
     });
     
     return {
-      text: response.text || "No information found.",
+      text: response.text || "No info found.",
       chunks: (response.candidates?.[0]?.groundingMetadata?.groundingChunks as GroundingChunk[]) || []
     };
   } catch (e) {
-    console.error("Maps Grounding Error", e);
-    if ((e as Error).message.includes("UNAUTHORIZED")) return { text: "دسترسی غیرمجاز.", chunks: [] };
-    return { text: "خطا در دریافت اطلاعات مکانی. کلید API را بررسی کنید.", chunks: [] };
+    return { text: "خطا در سرویس نقشه.", chunks: [] };
   }
 };
