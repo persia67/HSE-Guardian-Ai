@@ -2,8 +2,8 @@ import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { SafetyAnalysis, LogEntry, GroundingChunk } from "../types";
 import { checkLicense } from "./licenseService";
 
-// Timeout configuration to prevent hanging processes
-const API_TIMEOUT_MS = 15000;
+// Timeout configuration: Reduced to 10s for faster fail-over
+const API_TIMEOUT_MS = 10000;
 
 const analysisSchema = {
   type: Type.OBJECT,
@@ -46,29 +46,12 @@ const analysisSchema = {
   required: ["safetyScore", "isSafe", "summary", "hazards"],
 };
 
-const getApiKey = (): string | undefined => {
-  try {
-    // Robust check for various environments (Web, Electron, Node)
-    if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
-      return process.env.API_KEY;
-    }
-    // Fallback for some bundlers
-    if (typeof import.meta !== 'undefined' && (import.meta as any).env && (import.meta as any).env.VITE_API_KEY) {
-      return (import.meta as any).env.VITE_API_KEY;
-    }
-  } catch (e) {
-    // Ignore access errors
-  }
-  return undefined;
-};
-
 const ensureAuthorized = () => {
   if (!checkLicense()) {
     throw new Error("UNAUTHORIZED_ACCESS");
   }
 };
 
-// Helper to race promises with timeout
 const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T> => {
     return Promise.race([
         promise,
@@ -81,32 +64,20 @@ const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T> => {
 export const analyzeSafetyImage = async (base64Image: string): Promise<SafetyAnalysis> => {
   try {
     ensureAuthorized();
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-    const apiKey = getApiKey();
-    if (!apiKey) throw new Error("API Key not configured");
-
-    const ai = new GoogleGenAI({ apiKey });
-
-    // Optimize prompt for speed and strict JSON
-    const prompt = `Analyze this CCTV frame for industrial safety. Return JSON only.
-    Output Persian (Farsi) text for descriptions.
-    Focus on: PPE, Machinery, Fire, Housekeeping.
-    Detect hazards with bounding boxes (box_2d [ymin, xmin, ymax, xmax] 0-1000).`;
-
+    // Use gemini-2.5-flash for maximum speed/stability
     const request = ai.models.generateContent({
-      model: "gemini-3-flash-preview", 
+      model: "gemini-2.5-flash", 
       contents: {
         parts: [
           { inlineData: { mimeType: "image/jpeg", data: base64Image } },
-          { text: prompt },
+          { text: "Analyze industrial safety. JSON output only. Persian text. Detect hazards." },
         ],
       },
       config: {
         responseMimeType: "application/json",
         responseSchema: analysisSchema,
-        systemInstruction: "You are a fast, real-time safety AI.",
-        // Performance tuning: Lower thinking budget or turn it off for speed if supported, 
-        // strictly follow schema.
       },
     });
 
@@ -123,7 +94,7 @@ export const analyzeSafetyImage = async (base64Image: string): Promise<SafetyAna
 
   } catch (error) {
     const msg = (error as Error).message;
-    console.warn("Analysis skipped:", msg); // Warn instead of Error to keep console clean
+    console.warn("Analysis skipped:", msg);
 
     if (msg.includes("UNAUTHORIZED")) {
         return {
@@ -135,13 +106,13 @@ export const analyzeSafetyImage = async (base64Image: string): Promise<SafetyAna
         };
     }
     
-    // Return a 'Safe' fallback state on timeout to prevent UI flickering/panic
+    // Handle Timeout specifically
     if (msg === "REQUEST_TIMEOUT") {
          return {
             timestamp: new Date().toLocaleTimeString(),
-            safetyScore: -1, // Indicator for timeout
-            isSafe: true, // Assume safe on momentary glitch
-            summary: "تاخیر در ارتباط با شبکه...",
+            safetyScore: -1, 
+            isSafe: true, 
+            summary: "Timeout", // Short summary
             hazards: []
         };
     }
@@ -150,7 +121,7 @@ export const analyzeSafetyImage = async (base64Image: string): Promise<SafetyAna
       timestamp: new Date().toLocaleTimeString(),
       safetyScore: 0,
       isSafe: false,
-      summary: "خطا در پردازش تصویر.",
+      summary: "Error",
       hazards: [],
     };
   }
@@ -159,20 +130,14 @@ export const analyzeSafetyImage = async (base64Image: string): Promise<SafetyAna
 export const generateSessionReport = async (logs: LogEntry[]): Promise<string> => {
   try {
     ensureAuthorized();
-    const apiKey = getApiKey();
-    if (!apiKey) throw new Error("API Key missing");
-
-    const ai = new GoogleGenAI({ apiKey });
-
-    // Memory Optimization: Only send essential data, remove heavy fields if any
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const leanLogs = logs.slice(0, 30).map(({ thumbnail, videoUrl, ...rest }) => rest);
     
     const response = await ai.models.generateContent({
       model: "gemini-3-pro-preview",
       contents: {
         parts: [{
-          text: `Generate a Persian HSE Executive Report based on these logs: ${JSON.stringify(leanLogs)}. 
-          Format: Markdown. Include Trends, Key Risks, and Recommendations.`
+          text: `Generate a Persian HSE Executive Report based on these logs: ${JSON.stringify(leanLogs)}. Format: Markdown.`
         }]
       }
     });
@@ -180,27 +145,22 @@ export const generateSessionReport = async (logs: LogEntry[]): Promise<string> =
     return response.text || "Report generation failed.";
   } catch (error) {
     console.error("Report Error:", error);
-    return "خطا در تولید گزارش. لطفا اتصال اینترنت را بررسی کنید.";
+    return "خطا در تولید گزارش.";
   }
 };
 
 export const findNearbyEmergencyServices = async (lat: number, lng: number): Promise<{text: string, chunks: GroundingChunk[]}> => {
   try {
      ensureAuthorized();
-     const apiKey = getApiKey();
-     if (!apiKey) throw new Error("API Key missing");
-
-     const ai = new GoogleGenAI({ apiKey });
-     
+     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
      const response = await ai.models.generateContent({
       model: "gemini-2.5-flash", 
-      contents: "Find nearest hospitals and fire stations. Brief list.",
+      contents: "Find nearest hospitals and fire stations.",
       config: {
         tools: [{googleMaps: {}}],
         toolConfig: { retrievalConfig: { latLng: { latitude: lat, longitude: lng } } }
       },
     });
-    
     return {
       text: response.text || "No info found.",
       chunks: (response.candidates?.[0]?.groundingMetadata?.groundingChunks as GroundingChunk[]) || []

@@ -1,7 +1,7 @@
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import Webcam from 'react-webcam';
-import { Camera, AlertTriangle, CheckCircle, Pause, Play, Settings, Bell, X, Video, BrainCircuit, TrendingUp, ChevronDown, Smartphone, MessageSquare, Grid, Check, Monitor as MonitorIcon, Eye, RefreshCw, Clock } from 'lucide-react';
+import { Camera, AlertTriangle, CheckCircle, Pause, Play, Settings, Bell, X, Video, BrainCircuit, TrendingUp, ChevronDown, Smartphone, MessageSquare, Grid, Check, Monitor as MonitorIcon, Eye, RefreshCw, Clock, Loader2, RotateCcw, Sliders } from 'lucide-react';
 import { analyzeSafetyImage } from '../services/geminiService';
 import { SafetyAnalysis, LogEntry, Hazard } from '../types';
 
@@ -20,27 +20,28 @@ interface AlertSettings {
   categoryThresholds: Record<string, number>;
 }
 
-interface Prediction {
-  hazardType: string;
-  probability: number;
-  reasoning: string;
-}
+const RESOLUTIONS = {
+  'VGA': { width: 640, height: 480, label: 'VGA (640x480)' },
+  'HD': { width: 1280, height: 720, label: 'HD (1280x720)' },
+  'FHD': { width: 1920, height: 1080, label: 'Full HD (1920x1080)' },
+};
 
 const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
   const webcamRefs = useRef<{ [key: string]: Webcam | null }>({});
   
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [processStatus, setProcessStatus] = useState<string>(""); // Granular status text
   const [currentAnalysisCameraId, setCurrentAnalysisCameraId] = useState<string | null>(null);
   const [customLabels, setCustomLabels] = useState<Record<string, string>>({});
-  const [isSmartMode, setIsSmartMode] = useState(true);
+  
+  // Smart Camera State
   const [cameraLastCheckTime, setCameraLastCheckTime] = useState<Record<string, number>>({});
   const [cameraLastAlertTime, setCameraLastAlertTime] = useState<Record<string, number>>({});
   const [cameraHazardLevel, setCameraHazardLevel] = useState<Record<string, number>>({});
   const [cameraAnalyses, setCameraAnalyses] = useState<Record<string, SafetyAnalysis>>({});
-  const [intervalId, setIntervalId] = useState<ReturnType<typeof setInterval> | null>(null);
+  
   const [latency, setLatency] = useState<number>(0);
-  const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [activeDeviceIds, setActiveDeviceIds] = useState<string[]>([]);
   const [showCameraSelector, setShowCameraSelector] = useState(false);
@@ -48,6 +49,15 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
   const [isAlertActive, setIsAlertActive] = useState(false);
   const [isSilenced, setIsSilenced] = useState(false);
   const [smsNotification, setSmsNotification] = useState<string | null>(null);
+
+  // Camera Configuration State
+  const [cameraConfig, setCameraConfig] = useState<{
+    resolution: keyof typeof RESOLUTIONS;
+    frameRate: number;
+  }>({
+    resolution: 'HD',
+    frameRate: 30
+  });
 
   const [alertSettings, setAlertSettings] = useState<AlertSettings>({
     minSafetyScore: 60,
@@ -62,20 +72,13 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const oscillatorRef = useRef<OscillatorNode | null>(null);
-  const lastSmsTimeRef = useRef<number>(0);
+  const watchdogTimerRef = useRef<number | null>(null);
 
   // Load Labels
   useEffect(() => {
     const saved = localStorage.getItem('hse_camera_labels');
     if (saved) setCustomLabels(JSON.parse(saved));
   }, []);
-
-  const updateLabel = (deviceId: string, name: string) => {
-    const updated = { ...customLabels, [deviceId]: name };
-    if (!name.trim()) delete updated[deviceId];
-    setCustomLabels(updated);
-    localStorage.setItem('hse_camera_labels', JSON.stringify(updated));
-  };
 
   const getDeviceName = useCallback((deviceId: string) => {
     if (customLabels[deviceId]) return customLabels[deviceId];
@@ -94,7 +97,7 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
           setActiveDeviceIds([videoDevs[0].deviceId]);
         }
       } catch (e) {
-        console.warn("Camera enumeration failed (Desktop permission?)", e);
+        console.warn("Camera enumeration failed", e);
       }
     };
     getDevices();
@@ -150,6 +153,27 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
     }
   }, [alertSettings, isAlertActive, isSilenced, startAlarm]);
 
+  // --- Image Optimization ---
+  const resizeAndCompressImage = async (imageSrc: string): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const maxWidth = 640;
+        const scale = maxWidth / img.width;
+        canvas.width = maxWidth;
+        canvas.height = img.height * scale;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) { reject("Canvas error"); return; }
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+        resolve(dataUrl.split(',')[1]);
+      };
+      img.onerror = reject;
+      img.src = imageSrc;
+    });
+  };
+
   // --- Smart Camera Selection ---
   const getNextSmartCamera = useCallback((): string => {
     if (activeDeviceIds.length === 0) return '';
@@ -163,11 +187,7 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
         const lastCheck = cameraLastCheckTime[id] || 0;
         const secondsSinceCheck = (now - lastCheck) / 1000;
         const hazardWeight = (cameraHazardLevel[id] || 0) * 40;
-        const lastAlert = cameraLastAlertTime[id] || 0;
-        const secondsSinceAlert = (now - lastAlert) / 1000;
-        let retentionWeight = 0;
-        if (secondsSinceAlert < 90) retentionWeight = (90 - secondsSinceAlert) * 2.0; 
-        const priority = secondsSinceCheck + hazardWeight + retentionWeight;
+        const priority = secondsSinceCheck + hazardWeight;
 
         if (priority > maxPriority) {
             maxPriority = priority;
@@ -175,10 +195,17 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
         }
     });
     return bestCandidate;
-  }, [activeDeviceIds, cameraLastCheckTime, cameraHazardLevel, cameraLastAlertTime]);
+  }, [activeDeviceIds, cameraLastCheckTime, cameraHazardLevel]);
+
+  const forceReset = () => {
+     setIsAnalyzing(false);
+     setProcessStatus("Resetting...");
+     if (watchdogTimerRef.current) clearTimeout(watchdogTimerRef.current);
+     setTimeout(() => setProcessStatus(""), 1000);
+  };
 
   const captureAndAnalyze = useCallback(async () => {
-    if (activeDeviceIds.length === 0 || isAnalyzing) return;
+    if (activeDeviceIds.length === 0) return;
 
     const deviceId = getNextSmartCamera();
     const webcam = webcamRefs.current[deviceId];
@@ -188,19 +215,32 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
       if (imageSrc) {
         setIsAnalyzing(true);
         setCurrentAnalysisCameraId(deviceId);
-        const base64Data = imageSrc.split(',')[1];
+        setProcessStatus("Compressing...");
+
+        if (watchdogTimerRef.current) clearTimeout(watchdogTimerRef.current);
+        watchdogTimerRef.current = window.setTimeout(() => {
+           console.warn("Watchdog Triggered");
+           setIsAnalyzing(false);
+           setProcessStatus("Timeout - Retrying");
+        }, 12000); 
         
         try {
+          const compressedBase64 = await resizeAndCompressImage(imageSrc);
+          
+          setProcessStatus("Analyzing AI...");
           const startTime = performance.now();
-          const result = await analyzeSafetyImage(base64Data);
+          const result = await analyzeSafetyImage(compressedBase64);
           setLatency(Math.round(performance.now() - startTime));
 
-          // If timeout occurred (score -1), ignore
+          if (watchdogTimerRef.current) clearTimeout(watchdogTimerRef.current);
+
           if (result.safetyScore === -1) {
+              setProcessStatus("Network Lag");
               setCameraLastCheckTime(prev => ({ ...prev, [deviceId]: Date.now() }));
-              return;
+              return; // Finally block will clear isAnalyzing
           }
 
+          setProcessStatus("Done");
           const filteredHazards = result.hazards.filter(h => {
              const threshold = alertSettings.categoryThresholds[h.category] || 50;
              const conf = h.confidence !== undefined ? h.confidence : 100; 
@@ -217,34 +257,55 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
 
         } catch (e) {
           console.error("Analysis Error", e);
+          setProcessStatus("Error");
         } finally {
           setIsAnalyzing(false);
         }
+      } else {
+          setIsAnalyzing(false); 
       }
+    } else {
+        setIsAnalyzing(false);
     }
-  }, [isAnalyzing, onNewAnalysis, checkAlerts, activeDeviceIds, alertSettings.categoryThresholds, getNextSmartCamera, getDeviceName]);
+  }, [onNewAnalysis, checkAlerts, activeDeviceIds, alertSettings.categoryThresholds, getNextSmartCamera, getDeviceName]);
+
+  // --- Recursive Scheduling Loop ---
+  useEffect(() => {
+    let timeoutId: number;
+
+    if (isMonitoring && !isAnalyzing) {
+        const delay = activeDeviceIds.length > 1 ? 800 : 2000;
+        timeoutId = window.setTimeout(() => {
+            captureAndAnalyze();
+        }, delay);
+    }
+
+    return () => {
+        if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [isMonitoring, isAnalyzing, captureAndAnalyze, activeDeviceIds.length]);
+
+  // Cleanup
+  useEffect(() => {
+    return () => {
+      stopAlarm();
+      if (watchdogTimerRef.current) clearTimeout(watchdogTimerRef.current);
+    };
+  }, [stopAlarm]);
 
   const toggleMonitoring = () => {
     if (isMonitoring) {
-      if (intervalId) clearInterval(intervalId);
       setIsMonitoring(false);
       setIsAnalyzing(false);
       setIsSilenced(false);
       stopAlarm();
+      setProcessStatus("Stopped");
+      if (watchdogTimerRef.current) clearTimeout(watchdogTimerRef.current);
     } else {
       setIsMonitoring(true);
-      captureAndAnalyze(); 
-      const id = setInterval(captureAndAnalyze, activeDeviceIds.length > 1 ? 5000 : 8000); 
-      setIntervalId(id);
+      setProcessStatus("Starting...");
     }
   };
-
-  useEffect(() => {
-    return () => {
-      if (intervalId) clearInterval(intervalId);
-      stopAlarm();
-    };
-  }, [intervalId, stopAlarm]);
 
   const toggleCamera = (deviceId: string) => {
     setActiveDeviceIds(prev => prev.includes(deviceId) ? prev.filter(id => id !== deviceId) : [...prev, deviceId]);
@@ -276,24 +337,85 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
 
       {showSettings && (
         <div className="absolute inset-0 z-40 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-800 border border-slate-600 rounded-xl shadow-2xl w-full max-w-md p-6">
+          <div className="bg-slate-800 border border-slate-600 rounded-xl shadow-2xl w-full max-w-md p-6 overflow-y-auto max-h-[90vh]">
             <div className="flex justify-between items-center mb-6">
-              <h3 className="text-xl font-bold text-white">Settings</h3>
+              <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                <Sliders className="w-5 h-5 text-blue-400" /> Settings
+              </h3>
               <button onClick={() => setShowSettings(false)}><X className="w-6 h-6 text-slate-400" /></button>
             </div>
-            {/* Simplified Settings UI for brevity in this update - Full logic retained in state */}
-            <div className="space-y-4">
-               <div>
-                 <label className="text-white text-sm">Safety Threshold: {alertSettings.minSafetyScore}</label>
-                 <input type="range" className="w-full" min="0" max="100" value={alertSettings.minSafetyScore} onChange={e => setAlertSettings(p => ({...p, minSafetyScore: +e.target.value}))} />
+            
+            <div className="space-y-6">
+               {/* Alert Settings */}
+               <div className="space-y-4">
+                  <h4 className="text-sm font-bold text-slate-300 border-b border-slate-700 pb-2">Analysis Thresholds</h4>
+                  <div>
+                    <div className="flex justify-between mb-1">
+                      <label className="text-xs text-slate-400">Min Safety Score</label>
+                      <span className="text-xs font-mono text-emerald-400">{alertSettings.minSafetyScore}%</span>
+                    </div>
+                    <input 
+                      type="range" 
+                      className="w-full accent-blue-500 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer" 
+                      min="0" 
+                      max="100" 
+                      value={alertSettings.minSafetyScore} 
+                      onChange={e => setAlertSettings(p => ({...p, minSafetyScore: +e.target.value}))} 
+                    />
+                  </div>
+                  <div className="bg-slate-700/50 p-3 rounded flex items-center justify-between border border-slate-600">
+                    <label className="flex items-center gap-2 text-white text-sm">
+                      <input 
+                        type="checkbox" 
+                        className="w-4 h-4 rounded accent-blue-600"
+                        checked={alertSettings.soundEnabled} 
+                        onChange={e => setAlertSettings(p => ({...p, soundEnabled: e.target.checked}))} 
+                      />
+                      Enable Audio Alarm
+                    </label>
+                    <Bell className={`w-4 h-4 ${alertSettings.soundEnabled ? 'text-yellow-400' : 'text-slate-500'}`} />
+                  </div>
                </div>
-               <div className="bg-slate-700 p-3 rounded">
-                 <label className="flex items-center gap-2 text-white text-sm">
-                   <input type="checkbox" checked={alertSettings.soundEnabled} onChange={e => setAlertSettings(p => ({...p, soundEnabled: e.target.checked}))} />
-                   Enable Audio Alarm
-                 </label>
+
+               {/* Camera Settings */}
+               <div className="space-y-4">
+                  <h4 className="text-sm font-bold text-slate-300 border-b border-slate-700 pb-2 flex items-center gap-2">
+                    <Video className="w-4 h-4" /> Camera Configuration
+                  </h4>
+                  <div className="grid grid-cols-2 gap-4">
+                      <div>
+                          <label className="block text-xs text-slate-400 mb-1">Resolution</label>
+                          <select 
+                              value={cameraConfig.resolution} 
+                              onChange={(e) => setCameraConfig(prev => ({...prev, resolution: e.target.value as any}))}
+                              className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-white text-xs focus:border-blue-500 outline-none"
+                          >
+                              {Object.entries(RESOLUTIONS).map(([key, val]) => (
+                                  <option key={key} value={key}>{val.label}</option>
+                              ))}
+                          </select>
+                      </div>
+                      <div>
+                          <label className="block text-xs text-slate-400 mb-1">Frame Rate</label>
+                          <select 
+                              value={cameraConfig.frameRate} 
+                              onChange={(e) => setCameraConfig(prev => ({...prev, frameRate: Number(e.target.value)}))}
+                              className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-white text-xs focus:border-blue-500 outline-none"
+                          >
+                              <option value={15}>15 FPS (Eco)</option>
+                              <option value={30}>30 FPS (Standard)</option>
+                              <option value={60}>60 FPS (High)</option>
+                          </select>
+                      </div>
+                  </div>
                </div>
-               <button onClick={() => setShowSettings(false)} className="w-full bg-blue-600 py-2 rounded text-white font-bold">Save</button>
+
+               <button 
+                onClick={() => setShowSettings(false)} 
+                className="w-full bg-blue-600 hover:bg-blue-500 py-3 rounded-lg text-white font-bold transition-colors shadow-lg shadow-blue-900/20"
+               >
+                 Save Changes
+               </button>
             </div>
           </div>
         </div>
@@ -314,7 +436,13 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
                       ref={(el) => { if (webcamRefs.current) webcamRefs.current[deviceId] = el; }}
                       screenshotFormat="image/jpeg"
                       className="w-full h-full object-cover" // Ensure it fills the grid cell
-                      videoConstraints={{ deviceId: deviceId, aspectRatio: 1.777 }} // Request 16:9
+                      videoConstraints={{ 
+                        deviceId: deviceId, 
+                        width: { ideal: RESOLUTIONS[cameraConfig.resolution].width },
+                        height: { ideal: RESOLUTIONS[cameraConfig.resolution].height },
+                        frameRate: { ideal: cameraConfig.frameRate },
+                        aspectRatio: 1.777
+                      }}
                       onUserMediaError={(e) => console.error("Webcam Error", e)}
                    />
                    
@@ -324,9 +452,12 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
                       </div>
                       {currentAnalysisCameraId === deviceId && isAnalyzing && (
                           <div className="flex items-center gap-1 bg-blue-600/80 text-white text-[10px] px-2 py-1 rounded animate-pulse">
-                             <Eye className="w-3 h-3" /> AI
+                             <Eye className="w-3 h-3" /> <span className="hidden sm:inline">{processStatus}</span>
                           </div>
                       )}
+                      <div className="px-2 py-1 bg-black/50 backdrop-blur-sm rounded text-[8px] text-slate-300 font-mono hidden group-hover:block transition-all">
+                        {RESOLUTIONS[cameraConfig.resolution].width}x{RESOLUTIONS[cameraConfig.resolution].height} @ {cameraConfig.frameRate}fps
+                      </div>
                    </div>
 
                    {camAnalysis && camAnalysis.hazards.map((hazard, idx) => {
@@ -392,8 +523,20 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
                )}
             </div>
             
-            <button onClick={toggleMonitoring} className={`px-4 py-2 rounded-lg font-bold text-sm ${isMonitoring ? 'bg-red-900 text-red-200' : 'bg-emerald-600 text-white'}`}>
-              {isMonitoring ? "Stop" : "Start AI"}
+            <button 
+               onClick={forceReset}
+               className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300 transition-colors tooltip"
+               title="Force Reset AI"
+            >
+               <RotateCcw className="w-5 h-5" />
+            </button>
+
+            <button 
+                onClick={toggleMonitoring} 
+                className={`px-4 py-2 rounded-lg font-bold text-sm flex items-center gap-2 ${isMonitoring ? 'bg-red-900 text-red-200 hover:bg-red-800' : 'bg-emerald-600 text-white hover:bg-emerald-500'} transition-all`}
+            >
+              {isMonitoring ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+              {isMonitoring ? "Stop" : "Start"}
             </button>
             
             <button onClick={() => setShowSettings(true)} className="p-2 bg-slate-700 rounded-lg text-slate-300"><Settings className="w-5 h-5" /></button>
@@ -414,6 +557,10 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
                   <div className={`text-4xl font-black ${activeAnalysis.safetyScore < 80 ? 'text-amber-400' : 'text-emerald-400'}`}>
                     {activeAnalysis.safetyScore > 0 ? activeAnalysis.safetyScore : '--'}
                   </div>
+                </div>
+                <div className="flex items-center gap-2 text-xs font-mono text-blue-400">
+                    {isAnalyzing && <Loader2 className="w-4 h-4 animate-spin" />}
+                    <span>{processStatus}</span>
                 </div>
              </div>
 
@@ -438,7 +585,7 @@ const Monitor: React.FC<MonitorProps> = ({ onNewAnalysis }) => {
                </div>
              </div>
              <div className="mt-4 pt-4 border-t border-slate-700 text-xs text-slate-500 flex justify-between">
-               <span>Gemini 2.5 Flash Preview</span>
+               <span>Gemini 2.5 Flash</span>
                <span className="font-mono text-emerald-400">{latency}ms</span>
              </div>
            </div>

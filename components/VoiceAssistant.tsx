@@ -89,17 +89,13 @@ export default function VoiceAssistant() {
                 throw new Error("License validation failed. Voice features disabled.");
             }
 
-            // 2. API Key Check
-            const apiKey = typeof process !== 'undefined' && process.env ? process.env.API_KEY : null;
-            if (!apiKey) throw new Error("API Key missing.");
-
-            // 3. Audio Context Setup (Output)
+            // 2. Audio Context Setup (Output)
             const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
             const audioCtx = new AudioContextClass({ sampleRate: 24000 }); // Output usually 24k
             audioContextRef.current = audioCtx;
             nextStartTimeRef.current = audioCtx.currentTime;
 
-            // 4. Input Setup (Microphone)
+            // 3. Input Setup (Microphone)
             // We need 16kHz for Gemini Input
             const stream = await navigator.mediaDevices.getUserMedia({ 
                 audio: { 
@@ -111,10 +107,10 @@ export default function VoiceAssistant() {
             });
             streamRef.current = stream;
 
-            // 5. Initialize Gemini Client
-            const ai = new GoogleGenAI({ apiKey });
+            // 4. Initialize Gemini Client
+            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-            // 6. Connect to Live API
+            // 5. Connect to Live API
             const sessionPromise = ai.live.connect({
                 model: 'gemini-2.5-flash-native-audio-preview-09-2025',
                 config: {
