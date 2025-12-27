@@ -97,14 +97,27 @@ export default function VoiceAssistant() {
 
             // 3. Input Setup (Microphone)
             // We need 16kHz for Gemini Input
-            const stream = await navigator.mediaDevices.getUserMedia({ 
-                audio: { 
-                    sampleRate: 16000,
-                    channelCount: 1,
-                    echoCancellation: true,
-                    noiseSuppression: true
-                } 
-            });
+            let stream: MediaStream;
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: { 
+                        sampleRate: 16000,
+                        channelCount: 1,
+                        echoCancellation: true,
+                        noiseSuppression: true
+                    } 
+                });
+            } catch (err: any) {
+                if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                    throw new Error("Microphone access denied. Please allow permissions in your browser.");
+                } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+                    throw new Error("No microphone found. Please connect an audio device.");
+                } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+                    throw new Error("Microphone is busy. Please close other applications using it.");
+                } else {
+                    throw new Error(`Microphone error: ${err.message || 'Unknown error'}`);
+                }
+            }
             streamRef.current = stream;
 
             // 4. Initialize Gemini Client
@@ -161,9 +174,23 @@ export default function VoiceAssistant() {
                         console.log("Session Closed");
                         cleanup();
                     },
-                    onerror: (e) => {
+                    onerror: (e: any) => {
                         console.error("Session Error", e);
-                        setError("Connection lost. Please try again.");
+                        let errorMessage = "Connection lost. Please try again.";
+                        
+                        if (e.message) {
+                             if (e.message.includes("401") || e.message.includes("UNAUTHENTICATED")) {
+                                 errorMessage = "Authentication failed. Invalid API Key.";
+                             } else if (e.message.includes("429") || e.message.includes("RESOURCE_EXHAUSTED")) {
+                                 errorMessage = "Quota exceeded. Check your usage limits.";
+                             } else if (e.message.includes("503") || e.message.includes("UNAVAILABLE")) {
+                                 errorMessage = "Service unavailable. Please try again later.";
+                             } else {
+                                 errorMessage = `API Error: ${e.message}`;
+                             }
+                        }
+
+                        setError(errorMessage);
                         cleanup();
                     }
                 }
@@ -338,7 +365,7 @@ export default function VoiceAssistant() {
                 {/* Error Message */}
                 {error && (
                     <div className="bg-red-900/20 border border-red-500/50 text-red-200 p-4 rounded-xl flex items-center justify-center gap-3 animate-fadeIn">
-                        <XCircle className="w-5 h-5" />
+                        <XCircle className="w-5 h-5 shrink-0" />
                         <span className="text-sm">{error}</span>
                     </div>
                 )}

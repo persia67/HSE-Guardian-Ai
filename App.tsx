@@ -97,8 +97,17 @@ export default function App() {
     }
   };
 
-  // Prevent render until client is mounted to avoid hydration errors or black screens
-  if (!mounted) return null;
+  // Prevent render until client is mounted to avoid hydration errors, 
+  // BUT return a loader instead of null so React clears the HTML loader.
+  if (!mounted) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen bg-slate-900 text-slate-400">
+        <Loader2 className="w-12 h-12 animate-spin text-orange-500 mb-4" />
+        <h2 className="text-xl font-bold text-white">HSE Guardian AI</h2>
+        <p className="text-xs">Loading Application Interface...</p>
+      </div>
+    );
+  }
 
   if (!isActivated) {
     return (
