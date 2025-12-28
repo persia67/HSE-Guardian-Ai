@@ -1,14 +1,8 @@
-
 <!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <!-- 
-      Desktop/Electron Compatibility:
-      1. 'unsafe-inline' is needed for React in some build environments.
-      2. 'blob:' and 'data:' are essential for local Webcam streams and Base64 images.
-    -->
     <meta http-equiv="Content-Security-Policy" content="
       default-src 'self' file: filesystem:;
       connect-src 'self' https://generativelanguage.googleapis.com wss://generativelanguage.googleapis.com https://esm.sh data: blob: file:;
@@ -22,28 +16,6 @@
     ">
     <title>HSE Guardian AI</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-      // Global Error Handler for Startup Issues
-      window.onerror = function(message, source, lineno, colno, error) {
-        const loader = document.getElementById('app-loader');
-        if (loader) {
-          loader.innerHTML = `
-            <div style="color: #ef4444; text-align: center; padding: 20px; max-width: 90%;">
-              <h3 style="font-weight: bold; margin-bottom: 10px;">Startup Error</h3>
-              <p style="font-size: 12px; font-family: monospace; background: #1e293b; padding: 10px; border-radius: 6px; word-break: break-all;">
-                ${message}
-              </p>
-              <button onclick="window.location.reload()" style="margin-top: 15px; padding: 8px 16px; background: #334155; color: white; border: none; border-radius: 4px; cursor: pointer;">Retry</button>
-            </div>
-          `;
-        }
-      };
-
-      // Desktop Bridge Polyfill for Electron/Node environments
-      if (typeof window !== 'undefined' && typeof window.process === 'undefined') {
-        window.process = { env: { NODE_ENV: 'production' } };
-      }
-    </script>
     <style>
       /* Desktop App Specific Styles */
       .scrollbar-thin::-webkit-scrollbar { width: 6px; }
@@ -58,15 +30,15 @@
         -webkit-user-select: none;
         overflow: hidden;
         cursor: default;
-        background-color: #0f172a; /* Match slate-900 to avoid flash */
+        background-color: #0f172a;
         color: #f1f5f9;
+        margin: 0;
       }
       .rtl-text {
         font-family: 'Vazirmatn', sans-serif;
         direction: rtl;
       }
       
-      /* Loading Spinner Logic */
       #app-loader {
         position: fixed;
         top: 0; left: 0; width: 100%; height: 100%;
@@ -82,34 +54,32 @@
         width: 50px;
         height: 50px;
         border: 4px solid #334155;
-        border-top: 4px solid #f97316; /* Orange-500 */
+        border-top: 4px solid #f97316;
         border-radius: 50%;
         animation: spin 1s linear infinite;
       }
       @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-      
-      @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
       .animate-fadeIn { animation: fadeIn 0.3s ease-in-out; }
+      @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
     </style>
-  <script type="importmap">
+    <script type="importmap">
 {
   "imports": {
-    "react": "https://esm.sh/react@18.3.1",
-    "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
-    "react-dom": "https://esm.sh/react-dom@18.3.1",
+    "react": "https://esm.sh/react@18.2.0",
+    "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+    "react-dom": "https://esm.sh/react-dom@18.2.0",
     "@google/genai": "https://esm.sh/@google/genai",
-    "recharts": "https://esm.sh/recharts@2.12.7",
-    "lucide-react": "https://esm.sh/lucide-react@0.378.0",
-    "react-webcam": "https://esm.sh/react-webcam@7.2.0",
-    "react/": "https://esm.sh/react@^19.2.3/",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/"
+    "recharts": "https://esm.sh/recharts@2.12.7?deps=react@18.2.0,react-dom@18.2.0",
+    "lucide-react": "https://esm.sh/lucide-react@0.378.0?deps=react@18.2.0,react-dom@18.2.0",
+    "react-webcam": "https://esm.sh/react-webcam@7.2.0?deps=react@18.2.0,react-dom@18.2.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react/": "https://esm.sh/react@^19.2.3/"
   }
 }
 </script>
-</head>
+  </head>
   <body class="bg-slate-900 text-slate-100">
     <div id="root">
-      <!-- Fallback Loading Screen (Displays until React mounts) -->
       <div id="app-loader">
         <div class="loader-spin"></div>
         <h2 style="margin-top: 20px; font-weight: bold; color: #94a3b8;">HSE Guardian AI</h2>
