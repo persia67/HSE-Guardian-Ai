@@ -252,9 +252,8 @@ export default function VoiceAssistant() {
         };
 
         source.connect(processor);
-        processor.connect(ctx.destination); // Required for script processor to run, but mute it to prevent echo?
-        // Actually, connecting to destination might cause feedback if not careful. 
-        // We typically connect to a GainNode(0) -> Destination to keep the graph alive but silent locally.
+        
+        // Fix: Connect to a muted gain node instead of direct destination to prevent feedback loop
         const muteGain = ctx.createGain();
         muteGain.gain.value = 0;
         processor.connect(muteGain);

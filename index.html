@@ -16,6 +16,31 @@
     ">
     <title>HSE Guardian AI</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      // 1. Polyfill process safely. Do not overwrite if it exists (e.g. injected by environment)
+      window.process = window.process || {};
+      window.process.env = window.process.env || {};
+      window.process.env.NODE_ENV = window.process.env.NODE_ENV || 'production';
+
+      // 2. Global Error Handler: If React fails to mount, show the error on screen instead of infinite loading
+      window.onerror = function(message, source, lineno, colno, error) {
+        const loader = document.getElementById('app-loader');
+        const content = document.getElementById('loader-content');
+        if (loader && content) {
+          content.innerHTML = `
+            <div style="color: #ef4444; text-align: center; max-width: 90%;">
+              <h3 style="font-weight: bold; margin-bottom: 10px; font-size: 1.2rem;">Startup Failed</h3>
+              <p style="font-size: 11px; font-family: monospace; background: #1e293b; padding: 10px; border-radius: 6px; word-break: break-all; margin-bottom: 15px;">
+                ${message}
+              </p>
+              <button onclick="window.location.reload()" style="padding: 8px 20px; background: #334155; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">
+                Try Reloading
+              </button>
+            </div>
+          `;
+        }
+      };
+    </script>
     <style>
       /* Desktop App Specific Styles */
       .scrollbar-thin::-webkit-scrollbar { width: 6px; }
@@ -57,6 +82,7 @@
         border-top: 4px solid #f97316;
         border-radius: 50%;
         animation: spin 1s linear infinite;
+        margin-bottom: 20px;
       }
       @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
       .animate-fadeIn { animation: fadeIn 0.3s ease-in-out; }
@@ -81,9 +107,11 @@
   <body class="bg-slate-900 text-slate-100">
     <div id="root">
       <div id="app-loader">
-        <div class="loader-spin"></div>
-        <h2 style="margin-top: 20px; font-weight: bold; color: #94a3b8;">HSE Guardian AI</h2>
-        <p style="font-size: 12px; color: #64748b; margin-top: 5px;">Initializing System...</p>
+        <div id="loader-content" style="display: flex; flex-direction: column; align-items: center;">
+          <div class="loader-spin"></div>
+          <h2 style="font-weight: bold; color: #94a3b8; font-size: 1.25rem;">HSE Guardian AI</h2>
+          <p style="font-size: 12px; color: #64748b; margin-top: 5px;">Initializing Secure Environment...</p>
+        </div>
       </div>
     </div>
     <script type="module" src="./index.tsx"></script>
